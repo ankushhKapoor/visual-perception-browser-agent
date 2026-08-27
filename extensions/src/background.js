@@ -1,0 +1,1 @@
+console.log("Visual Perception Browser Agent: background service worker started");
