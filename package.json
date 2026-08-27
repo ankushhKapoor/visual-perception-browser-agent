@@ -20,5 +20,8 @@
   "bugs": {
     "url": "https://github.com/ankushhKapoor/visual-perception-browser-agent/issues"
   },
-  "homepage": "https://github.com/ankushhKapoor/visual-perception-browser-agent#readme"
+  "homepage": "https://github.com/ankushhKapoor/visual-perception-browser-agent#readme",
+  "devDependencies": {
+    "vite": "^8.2.2"
+  }
 }
