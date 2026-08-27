@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Privacy Detection Test</title>
+</head>
+
+<body>
+  <h1>Privacy Detection Test</h1>
+
+  <h2>Normal Fields — Should NOT be sensitive</h2>
+
+  <label>
+    Search
+    <input
+      type="text"
+      name="search"
+      placeholder="Search products"
+    />
+  </label>
+
+  <br /><br />
+
+  <label>
+    Favourite Color
+    <input
+      type="text"
+      name="favorite_color"
+      placeholder="Enter your favourite color"
+    />
+  </label>
+
+  <h2>Sensitive Fields — Should be detected</h2>
+
+  <label>
+    Email
+    <input
+      type="email"
+      name="email"
+      autocomplete="email"
+      placeholder="example@email.com"
+    />
+  </label>
+
+  <br /><br />
+
+  <label>
+    Password
+    <input
+      type="password"
+      name="password"
+      autocomplete="current-password"
+    />
+  </label>
+
+  <br /><br />
+
+  <label>
+    Phone Number
+    <input
+      type="tel"
+      name="phone"
+      autocomplete="tel"
+      placeholder="9876543210"
+    />
+  </label>
+
+  <br /><br />
+
+  <label>
+    Credit Card Number
+    <input
+      type="text"
+      name="card_number"
+      autocomplete="cc-number"
+      placeholder="1234 5678 9012 3456"
+    />
+  </label>
+
+  <br /><br />
+
+  <label>
+    CVV
+    <input
+      type="text"
+      name="cvv"
+      autocomplete="cc-csc"
+      placeholder="123"
+    />
+  </label>
+
+</body>
+</html>
