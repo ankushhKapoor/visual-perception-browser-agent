@@ -1,0 +1,24 @@
+{
+  "name": "visual-perception-browser-agent",
+  "version": "1.0.0",
+  "description": "Privacy-preserving browser-based vision agent for SIH26171.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ankushhKapoor/visual-perception-browser-agent.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/ankushhKapoor/visual-perception-browser-agent/issues"
+  },
+  "homepage": "https://github.com/ankushhKapoor/visual-perception-browser-agent#readme"
+}
