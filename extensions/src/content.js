@@ -24,12 +24,13 @@ function getInteractiveElements() {
   return Array.from(document.querySelectorAll(selectors.join(",")))
     .filter((element) => {
       const style = window.getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
 
       return (
         style.display !== "none" &&
         style.visibility !== "hidden" &&
-        element.getBoundingClientRect().width > 0 &&
-        element.getBoundingClientRect().height > 0
+        rect.width > 0 &&
+        rect.height > 0
       );
     })
     .slice(0, 100)
@@ -54,7 +55,30 @@ function getInteractiveElements() {
     });
 }
 
-function getSensitiveElements() {
+function isElementVisible(element) {
+  const style = window.getComputedStyle(element);
+  const rect = element.getBoundingClientRect();
+
+  return (
+    style.display !== "none" &&
+    style.visibility !== "hidden" &&
+    rect.width > 0 &&
+    rect.height > 0
+  );
+}
+
+function getElementRect(element) {
+  const rect = element.getBoundingClientRect();
+
+  return {
+    x: Math.round(rect.x),
+    y: Math.round(rect.y),
+    width: Math.round(rect.width),
+    height: Math.round(rect.height)
+  };
+}
+
+function getSensitiveInputElements() {
   const sensitiveKeywords = [
     "password",
     "email",
@@ -73,16 +97,9 @@ function getSensitiveElements() {
 
   return Array.from(document.querySelectorAll("input, textarea"))
     .filter((element) => {
-      const style = window.getComputedStyle(element);
-      const rect = element.getBoundingClientRect();
-
-      const isVisible =
-        style.display !== "none" &&
-        style.visibility !== "hidden" &&
-        rect.width > 0 &&
-        rect.height > 0;
-
-      if (!isVisible) return false;
+      if (!isElementVisible(element)) {
+        return false;
+      }
 
       const metadata = [
         element.type,
@@ -103,24 +120,79 @@ function getSensitiveElements() {
         )
       );
     })
-    .map((element) => {
-      const rect = element.getBoundingClientRect();
+    .map((element) => ({
+      source: "input",
+      tag: element.tagName.toLowerCase(),
+      type: element.type || null,
+      name: element.name || null,
+      id: element.id || null,
+      rect: getElementRect(element)
+    }));
+}
 
-      return {
-        tag: element.tagName.toLowerCase(),
-        type: element.type || null,
-        name: element.name || null,
-        id: element.id || null,
-        autocomplete: element.autocomplete || null,
-        placeholder: element.placeholder || null,
-        rect: {
-          x: Math.round(rect.x),
-          y: Math.round(rect.y),
-          width: Math.round(rect.width),
-          height: Math.round(rect.height)
-        }
-      };
-    });
+function containsPII(text) {
+  if (!text) {
+    return false;
+  }
+
+  const patterns = [
+    /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i,
+    /\b(?:\+91[\s-]?)?[6-9]\d{9}\b/,
+    /\b\d{4}[\s-]?\d{4}[\s-]?\d{4}\b/,
+    /\b[A-Z]{5}[0-9]{4}[A-Z]\b/i,
+    /\b(?:\d{4}[\s-]?){3}\d{4}\b/
+  ];
+
+  return patterns.some((pattern) => pattern.test(text));
+}
+
+function getSensitiveTextElements() {
+  const excludedTags = new Set([
+    "SCRIPT",
+    "STYLE",
+    "NOSCRIPT",
+    "INPUT",
+    "TEXTAREA",
+    "SELECT",
+    "OPTION"
+  ]);
+
+  return Array.from(document.querySelectorAll("body *"))
+    .filter((element) => {
+      if (excludedTags.has(element.tagName)) {
+        return false;
+      }
+
+      if (!isElementVisible(element)) {
+        return false;
+      }
+
+      const directText = Array.from(element.childNodes)
+        .filter((node) => node.nodeType === Node.TEXT_NODE)
+        .map((node) => node.textContent.trim())
+        .filter(Boolean)
+        .join(" ");
+
+      return containsPII(directText);
+    })
+    .map((element) => ({
+      source: "text",
+      tag: element.tagName.toLowerCase(),
+      text: Array.from(element.childNodes)
+        .filter((node) => node.nodeType === Node.TEXT_NODE)
+        .map((node) => node.textContent.trim())
+        .filter(Boolean)
+        .join(" ")
+        .slice(0, 200),
+      rect: getElementRect(element)
+    }));
+}
+
+function getSensitiveElements() {
+  return [
+    ...getSensitiveInputElements(),
+    ...getSensitiveTextElements()
+  ];
 }
 
 function extractPageContext() {
@@ -150,6 +222,11 @@ function redactScreenshot(dataUrl, sensitiveElements) {
     image.onload = () => {
       const canvas = document.createElement("canvas");
       const context = canvas.getContext("2d");
+
+      if (!context) {
+        reject(new Error("Could not create canvas context"));
+        return;
+      }
 
       canvas.width = image.width;
       canvas.height = image.height;
@@ -183,36 +260,6 @@ function redactScreenshot(dataUrl, sensitiveElements) {
   });
 }
 
-function displaySanitizedPreview(sanitizedScreenshot) {
-  const existingPreview = document.getElementById(
-    "visual-perception-sanitized-preview"
-  );
-
-  if (existingPreview) {
-    existingPreview.remove();
-  }
-
-  const preview = document.createElement("img");
-
-  preview.id = "visual-perception-sanitized-preview";
-  preview.src = sanitizedScreenshot;
-  preview.alt = "Sanitized Screenshot Preview";
-
-  preview.style.position = "fixed";
-  preview.style.top = "10px";
-  preview.style.right = "10px";
-  preview.style.width = "400px";
-  preview.style.maxHeight = "80vh";
-  preview.style.border = "3px solid red";
-  preview.style.zIndex = "2147483647";
-  preview.style.background = "white";
-  preview.style.objectFit = "contain";
-
-  document.body.appendChild(preview);
-
-  console.log("Sanitized screenshot preview displayed");
-}
-
 function captureScreenshot(sensitiveElements) {
   chrome.runtime.sendMessage(
     { type: "CAPTURE_SCREENSHOT" },
@@ -243,18 +290,16 @@ function captureScreenshot(sensitiveElements) {
         );
 
         console.log("Screenshot sanitized successfully");
-
         console.log(
           "Sensitive regions redacted:",
           sensitiveElements.length
         );
-
         console.log(
           "Sanitized screenshot size:",
           sanitizedScreenshot.length
         );
 
-        displaySanitizedPreview(sanitizedScreenshot);
+        console.log("Sanitized screenshot is ready for secure processing");
       } catch (error) {
         console.error(
           "Local screenshot redaction failed:",
