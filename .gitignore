@@ -1,12 +1,10 @@
+# Node.js
 node_modules/
 dist/
-build/
-.env
-.DS_Store
+
 # Python
 __pycache__/
 *.py[cod]
-*$py.class
 
 # Virtual environments
 .venv/
@@ -21,28 +19,16 @@ ENV/
 .vscode/
 .idea/
 
-# Python tooling
-.pytest_cache/
-.mypy_cache/
-
 # OS
 .DS_Store
 Thumbs.db
 
-# Generated files
+# Python tooling
+.pytest_cache/
+.mypy_cache/
+
+# Logs
 *.log
-
-# Model files
-*.pt
-*.pth
-*.onnx
-
-# Temporary files
-temp/
-tmp/
-# Python cache
-__pycache__/
-*.py[cod]
 
 # ML model weights
 *.pt
