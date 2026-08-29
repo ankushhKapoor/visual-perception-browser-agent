@@ -1,12 +1,11 @@
 /**
- * background.ts — Service Worker (Manifest V3 background script).
+ * background.ts — Service Worker (Manifest V3).
  *
- * Orchestrates one full agent step:
- *   1. Receive RUN_AGENT_STEP from popup (task + sessionId)
- *   2. Ask content script to COLLECT_STATE from the active tab
- *   3. POST the state to the FastAPI /agent/step endpoint
- *   4. Ask content script to EXECUTE_ACTION with the returned action
- *   5. Send AGENT_STEP_RESULT back to popup
+ * Message handlers:
+ *   RUN_AGENT_STEP        — single step from popup (original flow)
+ *   RUN_ALL_TASKS         — full executor loop over tasks.json
+ *   STOP_EXECUTOR         — graceful abort
+ *   CONFIRMATION_RESPONSE — user confirmation reply forwarded to executor
  */
 
 import type {
@@ -15,25 +14,15 @@ import type {
   RunAgentStepMessage,
 } from "./types";
 
-// ---------------------------------------------------------------------------
-// Config
-// ---------------------------------------------------------------------------
+import { runAllTasks, requestStop } from "./executor";
 
 const API_BASE = "http://localhost:8000";
-
-// ---------------------------------------------------------------------------
-// Helper: get the active tab
-// ---------------------------------------------------------------------------
 
 async function getActiveTab(): Promise<chrome.tabs.Tab> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id) throw new Error("No active tab found.");
   return tab;
 }
-
-// ---------------------------------------------------------------------------
-// Helper: send message to content script and await response
-// ---------------------------------------------------------------------------
 
 function sendToContent<T>(tabId: number, message: object): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -46,10 +35,6 @@ function sendToContent<T>(tabId: number, message: object): Promise<T> {
     });
   });
 }
-
-// ---------------------------------------------------------------------------
-// Helper: POST to /agent/step
-// ---------------------------------------------------------------------------
 
 async function callAgentStep(state: BrowserState): Promise<AgentStepResponse> {
   const body = {
@@ -81,10 +66,6 @@ async function callAgentStep(state: BrowserState): Promise<AgentStepResponse> {
   return response.json() as Promise<AgentStepResponse>;
 }
 
-// ---------------------------------------------------------------------------
-// Main agent step orchestration
-// ---------------------------------------------------------------------------
-
 async function runAgentStep(
   task: string,
   sessionId: string,
@@ -93,55 +74,64 @@ async function runAgentStep(
   const tab = await getActiveTab();
   const tabId = tab.id!;
 
-  // 1. Collect browser state from content script
-  console.log("[BG] Collecting state...");
   const stateMsg = await sendToContent<{ type: string; payload: BrowserState }>(
     tabId,
     { type: "COLLECT_STATE", payload: { task, sessionId } }
   );
   const state = stateMsg.payload;
-  console.log("[BG] State collected:", state.uiElements.length, "elements");
 
-  // 2. Call FastAPI backend
-  console.log("[BG] Calling /agent/step...");
   const agentResponse = await callAgentStep(state);
-  console.log("[BG] Action received:", agentResponse.action);
 
-  // 3. Execute the action in the content script
-  console.log("[BG] Executing action...");
-  const actionResult = await sendToContent<{ type: string; payload: { success: boolean; message: string } }>(
-    tabId,
-    { type: "EXECUTE_ACTION", payload: agentResponse.action }
-  );
-  console.log("[BG] Action result:", actionResult.payload);
+  const actionResult = await sendToContent<{
+    type: string;
+    payload: { success: boolean; message: string };
+  }>(tabId, { type: "EXECUTE_ACTION", payload: agentResponse.action });
 
-  // 4. Notify popup
-  chrome.tabs.sendMessage(senderId, {
-    type: "AGENT_STEP_RESULT",
-    payload: agentResponse,
-  }).catch(() => {
-    // Popup may have closed — that's OK
-  });
+  void actionResult;
+
+  chrome.tabs
+    .sendMessage(senderId, {
+      type: "AGENT_STEP_RESULT",
+      payload: agentResponse,
+    })
+    .catch(() => {});
 }
 
-// ---------------------------------------------------------------------------
-// Message listener
-// ---------------------------------------------------------------------------
-
-chrome.runtime.onMessage.addListener((message: RunAgentStepMessage, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "RUN_AGENT_STEP") {
-    const { task, sessionId } = message.payload;
+    const { task, sessionId } = (message as RunAgentStepMessage).payload;
     const senderId = sender.tab?.id ?? -1;
 
     runAgentStep(task, sessionId, senderId)
       .then(() => sendResponse({ type: "OK" }))
       .catch((err) => {
-        console.error("[BG] Error:", err);
         sendResponse({ type: "ERROR", payload: { message: String(err) } });
       });
 
-    return true; // Keep message channel open for async
+    return true;
+  }
+
+  if (message.type === "RUN_ALL_TASKS") {
+    const { sessionId } = message.payload as { sessionId: string };
+
+    runAllTasks(sessionId)
+      .then(() => sendResponse({ type: "OK" }))
+      .catch((err) => {
+        sendResponse({ type: "ERROR", payload: { message: String(err) } });
+      });
+
+    return true;
+  }
+
+  if (message.type === "STOP_EXECUTOR") {
+    requestStop();
+    sendResponse({ type: "OK" });
+    return false;
+  }
+
+  if (message.type === "CONFIRMATION_RESPONSE") {
+    chrome.runtime.sendMessage(message).catch(() => {});
+    sendResponse({ type: "OK" });
+    return false;
   }
 });
-
-console.log("[VisionAgent] Background service worker started.");

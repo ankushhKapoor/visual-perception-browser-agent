@@ -16,9 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from routers.agent import router as agent_router
 
-# ---------------------------------------------------------------------------
 # Environment
-# ---------------------------------------------------------------------------
 load_dotenv()
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "info").upper()
@@ -29,9 +27,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
 # App
-# ---------------------------------------------------------------------------
 app = FastAPI(
     title="Privacy-Preserving Browser Vision Agent — Backend",
     description=(
@@ -51,15 +47,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---------------------------------------------------------------------------
 # Routers
-# ---------------------------------------------------------------------------
 app.include_router(agent_router)
 
 
-# ---------------------------------------------------------------------------
 # Health check
-# ---------------------------------------------------------------------------
 @app.get("/health", tags=["infra"])
 async def health() -> dict:
     return {"status": "ok", "version": app.version}

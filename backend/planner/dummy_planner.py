@@ -90,24 +90,18 @@ class DummyPlanner(BasePlanner):
             context.url,
         )
 
-        # ------------------------------------------------------------------ #
         # 1. DONE / finish intent
-        # ------------------------------------------------------------------ #
         if any(kw in task_lower for kw in ("done", "finish", "complete", "stop", "exit")):
             action = AgentAction(type=ActionType.DONE)
             return action, "Task marked as done by user intent."
 
-        # ------------------------------------------------------------------ #
         # 2. SCROLL intent
-        # ------------------------------------------------------------------ #
         if any(kw in task_lower for kw in ("scroll", "page down", "page up")):
             direction = -500 if "up" in task_lower else 500
             action = AgentAction(type=ActionType.SCROLL, scroll_x=0, scroll_y=direction)
             return action, f"Scrolling {'up' if direction < 0 else 'down'} by {abs(direction)}px."
 
-        # ------------------------------------------------------------------ #
         # 3. TYPE / FILL intent
-        # ------------------------------------------------------------------ #
         if any(kw in task_lower for kw in ("type", "fill", "enter", "input", "write", "search")):
             value = _extract_type_value(context.task)
             task_keywords = [w for w in task_lower.split() if len(w) > 2]
@@ -131,9 +125,7 @@ class DummyPlanner(BasePlanner):
                     f"text='{target.text}'). Typing: '{value}'."
                 )
 
-        # ------------------------------------------------------------------ #
         # 4. CLICK intent (default for most actions)
-        # ------------------------------------------------------------------ #
         if any(kw in task_lower for kw in (
             "click", "press", "tap", "submit", "open", "select", "choose",
             "navigate", "go to", "login", "sign in", "sign up", "register",
@@ -153,9 +145,7 @@ class DummyPlanner(BasePlanner):
                     f"Clicking element '{target.id}' (role={target.role}, text='{target.text}')."
                 )
 
-        # ------------------------------------------------------------------ #
         # 5. Fallback: try any clickable element, then WAIT
-        # ------------------------------------------------------------------ #
         clickable = [
             el for el in elements
             if el.role in CLICKABLE_ROLES or el.tag in CLICKABLE_TAGS
@@ -171,9 +161,7 @@ class DummyPlanner(BasePlanner):
         action = AgentAction(type=ActionType.WAIT, wait_ms=1000)
         return action, "No matching elements found. Waiting 1 second."
 
-    # ---------------------------------------------------------------------- #
     # Helpers
-    # ---------------------------------------------------------------------- #
 
     @staticmethod
     def _find_element(

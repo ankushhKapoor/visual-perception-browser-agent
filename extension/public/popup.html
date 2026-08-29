@@ -18,6 +18,7 @@
       --accent: #6c63ff;
       --accent2: #9d4edd;
       --success: #22d3a5;
+      --warning: #f59e0b;
       --error: #f87171;
       --info: #60a5fa;
       --text: #e2e8f0;
@@ -25,9 +26,50 @@
       --radius: 12px;
     }
 
+    /* ── Confirmation dialog ─────────────────────────────────────────────── */
+    #confirmDialog {
+      display: none;
+      position: fixed; inset: 0;
+      background: rgba(13,15,20,0.88);
+      backdrop-filter: blur(4px);
+      z-index: 100;
+      padding: 24px 18px;
+      flex-direction: column;
+      gap: 14px;
+      justify-content: center;
+    }
+    #confirmDialog.visible { display: flex; }
+    .confirm-title {
+      font-size: 12px; font-weight: 700;
+      color: var(--warning); text-transform: uppercase; letter-spacing: 0.06em;
+    }
+    .confirm-icon { font-size: 22px; }
+    #confirmText {
+      font-size: 12px; color: var(--text);
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 9px; padding: 10px 12px; line-height: 1.6;
+    }
+    .confirm-btns { display: flex; gap: 8px; }
+    #confirmYesBtn {
+      flex: 1; background: rgba(248,113,113,0.15); color: var(--error);
+      border: 1px solid rgba(248,113,113,0.3); border-radius: 9px;
+      padding: 9px; font-family: 'Inter', sans-serif;
+      font-weight: 600; font-size: 12px; cursor: pointer;
+      transition: background 0.2s;
+    }
+    #confirmYesBtn:hover { background: rgba(248,113,113,0.28); }
+    #confirmNoBtn {
+      flex: 1; background: rgba(34,211,165,0.1); color: var(--success);
+      border: 1px solid rgba(34,211,165,0.25); border-radius: 9px;
+      padding: 9px; font-family: 'Inter', sans-serif;
+      font-weight: 600; font-size: 12px; cursor: pointer;
+      transition: background 0.2s;
+    }
+    #confirmNoBtn:hover { background: rgba(34,211,165,0.2); }
+
     body {
-      width: 380px;
-      min-height: 200px;
+      width: 420px;
+      min-height: 220px;
       background: var(--bg);
       color: var(--text);
       font-family: 'Inter', system-ui, sans-serif;
@@ -35,10 +77,10 @@
       line-height: 1.5;
     }
 
-    /* Header */
+    /* ── Header ─────────────────────────────────────────────────────────── */
     .header {
       background: linear-gradient(135deg, #1a1e2a 0%, #0f1220 100%);
-      padding: 16px 18px 14px;
+      padding: 14px 18px 12px;
       border-bottom: 1px solid var(--border);
       display: flex;
       align-items: center;
@@ -46,55 +88,62 @@
     }
 
     .logo {
-      width: 32px;
-      height: 32px;
+      width: 30px; height: 30px;
       background: linear-gradient(135deg, var(--accent), var(--accent2));
       border-radius: 8px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 16px;
-      flex-shrink: 0;
-      box-shadow: 0 0 16px rgba(108, 99, 255, 0.4);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 15px; flex-shrink: 0;
+      box-shadow: 0 0 14px rgba(108,99,255,0.4);
     }
 
-    .header-text h1 {
-      font-size: 14px;
-      font-weight: 700;
-      color: var(--text);
-      letter-spacing: 0.01em;
-    }
-
-    .header-text p {
-      font-size: 10px;
-      color: var(--text-muted);
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-    }
+    .header-text h1 { font-size: 13px; font-weight: 700; letter-spacing: 0.01em; }
+    .header-text p  { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
 
     .badge {
       margin-left: auto;
-      background: rgba(108, 99, 255, 0.15);
+      background: rgba(108,99,255,0.15);
       color: var(--accent);
-      font-size: 9px;
-      font-weight: 600;
-      padding: 2px 7px;
-      border-radius: 20px;
-      border: 1px solid rgba(108, 99, 255, 0.25);
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
+      font-size: 9px; font-weight: 600;
+      padding: 2px 7px; border-radius: 20px;
+      border: 1px solid rgba(108,99,255,0.25);
+      text-transform: uppercase; letter-spacing: 0.06em;
     }
 
-    /* Body */
-    .body { padding: 16px 18px; }
+    /* ── Tabs ────────────────────────────────────────────────────────────── */
+    .tabs {
+      display: flex;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+
+    .tab-btn {
+      flex: 1; padding: 9px 0;
+      background: none; border: none;
+      color: var(--text-muted);
+      font-family: 'Inter', sans-serif;
+      font-size: 11px; font-weight: 600;
+      cursor: pointer;
+      text-transform: uppercase; letter-spacing: 0.06em;
+      transition: color 0.2s, border-bottom 0.2s;
+      border-bottom: 2px solid transparent;
+    }
+
+    .tab-btn.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    /* ── Body ────────────────────────────────────────────────────────────── */
+    .body { padding: 14px 18px; }
 
     label {
       display: block;
-      font-size: 11px;
-      font-weight: 600;
+      font-size: 11px; font-weight: 600;
       color: var(--text-muted);
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
+      text-transform: uppercase; letter-spacing: 0.06em;
       margin-bottom: 6px;
     }
 
@@ -105,166 +154,176 @@
       border-radius: var(--radius);
       color: var(--text);
       font-family: 'Inter', sans-serif;
-      font-size: 13px;
-      padding: 10px 12px;
-      resize: vertical;
-      min-height: 72px;
+      font-size: 13px; padding: 10px 12px;
+      resize: vertical; min-height: 68px;
       outline: none;
       transition: border-color 0.2s, box-shadow 0.2s;
     }
-
     textarea::placeholder { color: var(--text-muted); }
-
     textarea:focus {
       border-color: var(--accent);
-      box-shadow: 0 0 0 3px rgba(108, 99, 255, 0.15);
+      box-shadow: 0 0 0 3px rgba(108,99,255,0.15);
     }
 
-    /* Buttons */
-    .btn-row {
-      display: flex;
-      gap: 8px;
-      margin-top: 12px;
-    }
+    /* ── Buttons ─────────────────────────────────────────────────────────── */
+    .btn-row { display: flex; gap: 8px; margin-top: 10px; }
 
     button {
-      cursor: pointer;
-      border: none;
-      border-radius: 9px;
+      cursor: pointer; border: none; border-radius: 9px;
       font-family: 'Inter', sans-serif;
-      font-weight: 600;
-      font-size: 12px;
+      font-weight: 600; font-size: 12px;
       transition: all 0.2s;
     }
 
-    #runBtn {
+    .btn-primary {
       flex: 1;
       background: linear-gradient(135deg, var(--accent), var(--accent2));
-      color: #fff;
-      padding: 10px 16px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 7px;
-      box-shadow: 0 4px 14px rgba(108, 99, 255, 0.35);
+      color: #fff; padding: 9px 14px;
+      display: flex; align-items: center; justify-content: center; gap: 6px;
+      box-shadow: 0 4px 14px rgba(108,99,255,0.35);
     }
+    .btn-primary:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(108,99,255,0.5); }
+    .btn-primary:active:not(:disabled) { transform: translateY(0); }
+    .btn-primary:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
 
-    #runBtn:hover:not(:disabled) {
-      transform: translateY(-1px);
-      box-shadow: 0 6px 20px rgba(108, 99, 255, 0.5);
+    .btn-secondary {
+      background: var(--surface2); color: var(--text-muted);
+      border: 1px solid var(--border); padding: 9px 12px; font-size: 11px;
     }
+    .btn-secondary:hover { background: var(--border); color: var(--text); }
 
-    #runBtn:active:not(:disabled) { transform: translateY(0); }
-
-    #runBtn:disabled {
-      opacity: 0.6;
-      cursor: not-allowed;
-      transform: none;
+    .btn-danger {
+      background: rgba(248,113,113,0.12); color: var(--error);
+      border: 1px solid rgba(248,113,113,0.25); padding: 9px 12px; font-size: 11px;
     }
+    .btn-danger:hover { background: rgba(248,113,113,0.22); }
+    .btn-danger:disabled { opacity: 0.4; cursor: not-allowed; }
 
-    #newSessionBtn {
-      background: var(--surface2);
-      color: var(--text-muted);
-      border: 1px solid var(--border);
-      padding: 10px 12px;
-      font-size: 11px;
-    }
-
-    #newSessionBtn:hover {
-      background: var(--border);
-      color: var(--text);
-    }
-
-    /* Spinner */
-    #spinner {
-      display: none;
-      align-items: center;
-      gap: 6px;
-    }
-
-    .dot-pulse {
-      display: flex;
-      gap: 3px;
-    }
-
+    /* ── Spinner ─────────────────────────────────────────────────────────── */
+    .spinner { display: none; align-items: center; gap: 5px; }
+    .dot-pulse { display: flex; gap: 3px; }
     .dot-pulse span {
-      width: 4px;
-      height: 4px;
-      background: #fff;
-      border-radius: 50%;
+      width: 4px; height: 4px; background: #fff; border-radius: 50%;
       animation: pulse 1.2s infinite ease-in-out;
     }
-
     .dot-pulse span:nth-child(2) { animation-delay: 0.2s; }
     .dot-pulse span:nth-child(3) { animation-delay: 0.4s; }
-
     @keyframes pulse {
       0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
-      40% { transform: scale(1); opacity: 1; }
+      40%            { transform: scale(1);   opacity: 1; }
     }
 
-    /* Status */
+    /* ── Status banner ───────────────────────────────────────────────────── */
     .status {
-      margin-top: 12px;
-      padding: 8px 12px;
-      border-radius: 8px;
-      font-size: 12px;
-      font-weight: 500;
+      margin-top: 10px; padding: 7px 12px;
+      border-radius: 8px; font-size: 12px; font-weight: 500;
       display: none;
     }
-
     .status.info    { display: block; background: rgba(96,165,250,0.1);  color: var(--info);    border: 1px solid rgba(96,165,250,0.2); }
     .status.success { display: block; background: rgba(34,211,165,0.1);  color: var(--success); border: 1px solid rgba(34,211,165,0.2); }
-    .status.done    { background: rgba(34,211,165,0.18); }
     .status.error   { display: block; background: rgba(248,113,113,0.1); color: var(--error);   border: 1px solid rgba(248,113,113,0.2); }
 
-    /* Result section */
-    #resultSection {
-      display: none;
-      margin-top: 14px;
-      border-top: 1px solid var(--border);
-      padding-top: 14px;
-    }
-
-    .result-block { margin-bottom: 12px; }
-
-    .result-block label {
-      margin-bottom: 5px;
-      color: var(--accent);
-    }
-
+    /* ── Single step result ──────────────────────────────────────────────── */
+    #resultSection { display: none; margin-top: 12px; border-top: 1px solid var(--border); padding-top: 12px; }
+    .result-block { margin-bottom: 10px; }
+    .result-block label { margin-bottom: 4px; color: var(--accent); }
     pre {
-      background: var(--surface2);
-      border: 1px solid var(--border);
-      border-radius: 9px;
-      padding: 10px 12px;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 11px;
-      color: #a5b4fc;
-      overflow-x: auto;
-      white-space: pre-wrap;
-      word-break: break-all;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 9px; padding: 9px 12px;
+      font-family: 'JetBrains Mono', monospace; font-size: 11px;
+      color: #a5b4fc; overflow-x: auto; white-space: pre-wrap; word-break: break-all;
     }
-
     #reasoningOutput {
-      background: var(--surface2);
-      border: 1px solid var(--border);
-      border-radius: 9px;
-      padding: 9px 12px;
-      font-size: 12px;
-      color: var(--text-muted);
-      font-style: italic;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 9px; padding: 8px 12px;
+      font-size: 12px; color: var(--text-muted); font-style: italic;
     }
 
-    /* Divider */
-    .divider {
-      height: 1px;
-      background: var(--border);
-      margin: 0 -18px;
+    /* ── Executor panel ──────────────────────────────────────────────────── */
+    #execSummary {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 10px;
     }
+
+    #execSummary .count {
+      font-size: 11px; color: var(--text-muted);
+    }
+
+    /* Progress bar */
+    .progress-wrap {
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 6px; height: 6px; overflow: hidden; margin-bottom: 12px;
+    }
+    .progress-bar {
+      height: 100%;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      border-radius: 6px;
+      width: 0%;
+      transition: width 0.4s ease;
+    }
+
+    /* Task cards */
+    #taskList { display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow-y: auto; }
+    #taskList::-webkit-scrollbar { width: 4px; }
+    #taskList::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+    .task-card {
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 10px; padding: 9px 12px;
+      display: flex; flex-direction: column; gap: 4px;
+      transition: border-color 0.2s;
+    }
+    .task-card.running  { border-color: var(--accent); }
+    .task-card.done     { border-color: var(--success); }
+    .task-card.failed   { border-color: var(--error); }
+
+    .task-card-header { display: flex; align-items: center; justify-content: space-between; }
+    .task-card-id { font-size: 10px; font-weight: 600; color: var(--text-muted); font-family: 'JetBrains Mono', monospace; }
+    .task-badge {
+      font-size: 9px; font-weight: 700; padding: 2px 6px;
+      border-radius: 20px; text-transform: uppercase; letter-spacing: 0.05em;
+    }
+    .task-badge.pending  { background: rgba(100,116,139,0.2); color: var(--text-muted); }
+    .task-badge.running  { background: rgba(108,99,255,0.2);  color: var(--accent); }
+    .task-badge.done     { background: rgba(34,211,165,0.2);  color: var(--success); }
+    .task-badge.failed   { background: rgba(248,113,113,0.2); color: var(--error); }
+
+    .task-card-task { font-size: 12px; color: var(--text); font-weight: 500; }
+    .task-card-url  { font-size: 10px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    .task-card-step {
+      font-size: 10px; color: var(--text-muted);
+      display: flex; align-items: center; gap: 5px;
+    }
+    .task-step-bar {
+      flex: 1; background: var(--border); border-radius: 3px; height: 3px; overflow: hidden;
+    }
+    .task-step-fill {
+      height: 100%; background: var(--accent); border-radius: 3px;
+      transition: width 0.3s;
+    }
+
+    .task-card-reasoning {
+      font-size: 10px; color: var(--text-muted); font-style: italic;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .task-card-error { font-size: 10px; color: var(--error); }
+
+    /* ── Footer summary ──────────────────────────────────────────────────── */
+    #execResult {
+      display: none; margin-top: 10px;
+      padding: 8px 12px; border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--surface2);
+      font-size: 12px;
+    }
+    #execResult.success { border-color: var(--success); background: rgba(34,211,165,0.07); }
+    #execResult.partial { border-color: var(--warning); background: rgba(245,158,11,0.07); }
+    #execResult.failed  { border-color: var(--error);   background: rgba(248,113,113,0.07); }
   </style>
 </head>
 <body>
+  <!-- Header -->
   <div class="header">
     <div class="logo">🧠</div>
     <div class="header-text">
@@ -274,36 +333,78 @@
     <span class="badge">Prototype</span>
   </div>
 
-  <div class="body">
-    <label for="taskInput">Task Description</label>
-    <textarea
-      id="taskInput"
-      placeholder='e.g. "Click the login button" or "Type hello@example.com in the email field"'
-    ></textarea>
+  <!-- Tabs -->
+  <div class="tabs">
+    <button class="tab-btn active" id="tabSingle">Single Step</button>
+    <button class="tab-btn"        id="tabExecutor">Task Executor</button>
+  </div>
 
-    <div class="btn-row">
-      <button id="runBtn">
-        <div id="spinner">
-          <div class="dot-pulse">
-            <span></span><span></span><span></span>
+  <!-- ══════════════════ SINGLE STEP TAB ══════════════════ -->
+  <div class="tab-panel active" id="panelSingle">
+    <div class="body">
+      <label for="taskInput">Task Description</label>
+      <textarea
+        id="taskInput"
+        placeholder='e.g. "Click the login button" or "Type hello@example.com in the email field"'
+      ></textarea>
+
+      <div class="btn-row">
+        <button class="btn-primary" id="runBtn">
+          <div class="spinner" id="spinner">
+            <div class="dot-pulse"><span></span><span></span><span></span></div>
           </div>
+          <span id="btnLabel">▶ Run Step</span>
+        </button>
+        <button class="btn-secondary" id="newSessionBtn" title="Start a new session">↺ New</button>
+      </div>
+
+      <div id="status" class="status"></div>
+
+      <div id="resultSection">
+        <div class="result-block">
+          <label>Action</label>
+          <pre id="actionOutput"></pre>
         </div>
-        <span id="btnLabel">▶ Run Step</span>
-      </button>
-      <button id="newSessionBtn" title="Start a new session">↺ New</button>
+        <div class="result-block">
+          <label>Reasoning</label>
+          <p id="reasoningOutput"></p>
+        </div>
+      </div>
     </div>
+  </div>
 
-    <div id="status" class="status"></div>
+  <!-- ══════════════════ EXECUTOR TAB ══════════════════ -->
+  <div class="tab-panel" id="panelExecutor">
+    <div class="body">
 
-    <div id="resultSection">
-      <div class="result-block">
-        <label>Action</label>
-        <pre id="actionOutput"></pre>
+      <div id="execSummary">
+        <span class="count" id="execTaskCount">Loading tasks…</span>
+        <div class="btn-row" style="margin-top:0">
+          <button class="btn-primary"   id="execRunBtn">▶ Run All Tasks</button>
+          <button class="btn-danger"    id="execStopBtn" disabled>■ Stop</button>
+        </div>
       </div>
-      <div class="result-block">
-        <label>Reasoning</label>
-        <p id="reasoningOutput"></p>
+
+      <!-- Overall progress bar -->
+      <div class="progress-wrap">
+        <div class="progress-bar" id="execProgressBar"></div>
       </div>
+
+      <!-- Per-task cards -->
+      <div id="taskList"></div>
+
+      <!-- Final summary -->
+      <div id="execResult"></div>
+    </div>
+  </div>
+
+  <div id="confirmDialog">
+    <span class="confirm-icon">⚠️</span>
+    <span class="confirm-title">Action Requires Confirmation</span>
+    <p id="confirmText"></p>
+    <div class="confirm-btns">
+      <button id="confirmYesBtn">Confirm &amp; Execute</button>
+      <button id="confirmNoBtn">Deny — Skip Action</button>
     </div>
   </div>
 

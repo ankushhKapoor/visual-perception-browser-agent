@@ -11,9 +11,7 @@ from typing import Any, Optional
 from pydantic import BaseModel, Field
 
 
-# ---------------------------------------------------------------------------
 # UI Element (sent by the extension after DOM scraping)
-# ---------------------------------------------------------------------------
 
 class UIElement(BaseModel):
     id: str = Field(..., description="Unique data-agent-id assigned by the extension")
@@ -26,9 +24,7 @@ class UIElement(BaseModel):
     )
 
 
-# ---------------------------------------------------------------------------
 # Agent Step Request — what the extension sends
-# ---------------------------------------------------------------------------
 
 class AgentStepRequest(BaseModel):
     session_id: str = Field(..., description="Unique session identifier")
@@ -50,40 +46,47 @@ class AgentStepRequest(BaseModel):
     )
 
 
-# ---------------------------------------------------------------------------
 # Action Types and Payloads
-# ---------------------------------------------------------------------------
 
 class ActionType(str, Enum):
     CLICK = "CLICK"
     TYPE = "TYPE"
     SCROLL = "SCROLL"
+    SELECT = "SELECT"
+    PRESS_KEY = "PRESS_KEY"
     WAIT = "WAIT"
     DONE = "DONE"
+    ASK_USER_CONFIRMATION = "ASK_USER_CONFIRMATION"
 
 
 class AgentAction(BaseModel):
     type: ActionType
     target_id: Optional[str] = Field(
         default=None,
-        description="data-agent-id of the target element (for CLICK / TYPE)"
+        description="data-agent-id of the target element (for CLICK / TYPE / SELECT)"
     )
     value: Optional[str] = Field(
         default=None,
-        description="Text to type (for TYPE action)"
+        description="Text to type or option value to select"
+    )
+    key_to_press: Optional[str] = Field(
+        default=None,
+        description="Key name for PRESS_KEY action (e.g. Enter, Tab, Escape)"
     )
     scroll_x: Optional[int] = Field(default=None, description="Horizontal scroll delta (px)")
     scroll_y: Optional[int] = Field(default=500, description="Vertical scroll delta (px)")
     wait_ms: Optional[int] = Field(default=1000, description="Wait duration in ms")
+    confidence: Optional[float] = Field(
+        default=None,
+        description="Model confidence in this action [0.0–1.0]"
+    )
     extra: dict[str, Any] = Field(
         default_factory=dict,
         description="Additional action parameters for future use"
     )
 
 
-# ---------------------------------------------------------------------------
 # Agent Step Response — what the backend sends back
-# ---------------------------------------------------------------------------
 
 class AgentStepResponse(BaseModel):
     session_id: str

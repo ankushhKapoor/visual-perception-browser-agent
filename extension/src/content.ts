@@ -16,9 +16,7 @@ import type {
   UIElement,
 } from "./types";
 
-// ---------------------------------------------------------------------------
 // Constants
-// ---------------------------------------------------------------------------
 
 const AGENT_ID_ATTR = "data-agent-id";
 const AGENT_ID_PREFIX = "ag";
@@ -42,9 +40,7 @@ const INTERACTIVE_SELECTOR = [
   "[role='option']",
 ].join(", ");
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 
 let _idCounter = 0;
 
@@ -111,6 +107,16 @@ function getAttributes(el: Element): Record<string, string> {
   return attrs;
 }
 
+function setInputValue(input: HTMLInputElement, value: string): void {
+  // Use the native setter so frameworks such as YouTube observe the edit.
+  const setter = Object.getOwnPropertyDescriptor(
+    HTMLInputElement.prototype,
+    "value"
+  )?.set;
+  setter?.call(input, value);
+  input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+}
+
 function getVisibleText(): string {
   const walker = document.createTreeWalker(
     document.body,
@@ -140,9 +146,7 @@ function getVisibleText(): string {
   return texts.join(" ").slice(0, 4000);
 }
 
-// ---------------------------------------------------------------------------
 // State Collection
-// ---------------------------------------------------------------------------
 
 function collectState(task: string, sessionId: string): BrowserState {
   _idCounter = 0; // Reset IDs on each collection pass
@@ -182,15 +186,13 @@ function collectState(task: string, sessionId: string): BrowserState {
   };
 }
 
-// ---------------------------------------------------------------------------
 // Action Execution
-// ---------------------------------------------------------------------------
 
 async function executeAction(action: AgentAction): Promise<{ success: boolean; message: string }> {
   const { type } = action;
 
-  if (type === "DONE") {
-    return { success: true, message: "Task marked as DONE. No action performed." };
+  if (type === "DONE" || type === "ASK_USER_CONFIRMATION") {
+    return { success: true, message: `${type} acknowledged.` };
   }
 
   if (type === "WAIT") {
@@ -206,7 +208,30 @@ async function executeAction(action: AgentAction): Promise<{ success: boolean; m
     return { success: true, message: `Scrolled by (${x}, ${y}).` };
   }
 
-  // CLICK / TYPE — need a target element
+  if (type === "PRESS_KEY") {
+    const key = action.key_to_press ?? action.value ?? "Enter";
+    const targetId = action.target_id;
+    const target = targetId
+      ? (document.querySelector<HTMLElement>(`[${AGENT_ID_ATTR}="${targetId}"]`) ?? document.body)
+      : (document.activeElement as HTMLElement) ?? document.body;
+
+    target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+    target.dispatchEvent(new KeyboardEvent("keypress", { key, bubbles: true, cancelable: true }));
+    target.dispatchEvent(new KeyboardEvent("keyup", { key, bubbles: true, cancelable: true }));
+    if (key === "Enter") {
+      const input = target as HTMLInputElement;
+      if (input.form) {
+        try { input.form.requestSubmit(); } catch { input.form.submit(); }
+      } else {
+        const submitButton = target.closest("form")?.querySelector<HTMLElement>(
+          "button[type='submit'], input[type='submit']"
+        );
+        submitButton?.click();
+      }
+    }
+    return { success: true, message: `Pressed key "${key}".` };
+  }
+
   const targetId = action.target_id;
   if (!targetId) {
     return { success: false, message: `Action ${type} requires target_id but none was provided.` };
@@ -220,7 +245,6 @@ async function executeAction(action: AgentAction): Promise<{ success: boolean; m
     };
   }
 
-  // Scroll element into view
   el.scrollIntoView({ block: "center", behavior: "smooth" });
   await new Promise((res) => setTimeout(res, 150));
 
@@ -233,30 +257,174 @@ async function executeAction(action: AgentAction): Promise<{ success: boolean; m
   if (type === "TYPE") {
     const input = el as HTMLInputElement;
     el.focus();
-    // Clear existing value
-    input.value = "";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
+    setInputValue(input, "");
 
     const value = action.value ?? "";
     for (const char of value) {
-      input.value += char;
-      input.dispatchEvent(new Event("input", { bubbles: true }));
+      setInputValue(input, input.value + char);
       input.dispatchEvent(new KeyboardEvent("keydown", { key: char, bubbles: true }));
       input.dispatchEvent(new KeyboardEvent("keyup", { key: char, bubbles: true }));
-      await new Promise((res) => setTimeout(res, 20)); // Human-like delay
+      await new Promise((res) => setTimeout(res, 20));
     }
     input.dispatchEvent(new Event("change", { bubbles: true }));
     return { success: true, message: `Typed "${value}" into element "${targetId}".` };
   }
 
+  if (type === "SELECT") {
+    const select = el as HTMLSelectElement;
+    const value = action.value ?? "";
+    const option = Array.from(select.options).find(
+      (o) => o.value === value || o.text.toLowerCase() === value.toLowerCase()
+    );
+    if (!option) {
+      return { success: false, message: `Option "${value}" not found in select "${targetId}".` };
+    }
+    select.value = option.value;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    return { success: true, message: `Selected "${option.text}" in "${targetId}".` };
+  }
+
   return { success: false, message: `Unknown action type: ${type}` };
 }
 
-// ---------------------------------------------------------------------------
+// Scripted Step Execution — uses CSS selectors, no data-agent-id needed
+
+async function executeScriptedStep(step: {
+  action: string;
+  cssSelector?: string;
+  value?: string;
+  key_to_press?: string;
+  scroll_x?: number;
+  scroll_y?: number;
+  wait_ms?: number;
+}): Promise<{ success: boolean; message: string }> {
+  const { action } = step;
+
+  if (action === "WAIT") {
+    const ms = step.wait_ms ?? 1000;
+    await new Promise((r) => setTimeout(r, ms));
+    return { success: true, message: `Waited ${ms}ms.` };
+  }
+
+  if (action === "SCROLL") {
+    const x = step.scroll_x ?? 0;
+    const y = step.scroll_y ?? 500;
+    window.scrollBy({ left: x, top: y, behavior: "smooth" });
+    return { success: true, message: `Scrolled (${x}, ${y}).` };
+  }
+
+  if (action === "PRESS_KEY") {
+    const key = step.key_to_press ?? "Enter";
+    const keyCodeMap: Record<string, number> = {
+      Enter: 13, Tab: 9, Escape: 27, Backspace: 8, Space: 32,
+      ArrowUp: 38, ArrowDown: 40, ArrowLeft: 37, ArrowRight: 39,
+    };
+    const keyCode = keyCodeMap[key] ?? key.charCodeAt(0);
+    const eventInit = { key, code: key, keyCode, which: keyCode, bubbles: true, cancelable: true };
+
+    const target = (document.activeElement as HTMLElement) ?? document.body;
+    target.dispatchEvent(new KeyboardEvent("keydown",  eventInit));
+    target.dispatchEvent(new KeyboardEvent("keypress", eventInit));
+    target.dispatchEvent(new KeyboardEvent("keyup",    eventInit));
+
+    if (key === "Enter") {
+      const input = target as HTMLInputElement;
+      if (input.form) {
+        try { input.form.requestSubmit(); } catch { input.form.submit(); }
+      } else {
+        const submitButton = target.closest("form")?.querySelector<HTMLElement>(
+          "button[type='submit'], input[type='submit']"
+        );
+        submitButton?.click();
+      }
+    }
+
+    return { success: true, message: `Pressed key "${key}".` };
+  }
+
+  // CLICK / TYPE — need a CSS selector
+  if (!step.cssSelector) {
+    return { success: false, message: `${action} requires cssSelector.` };
+  }
+
+  // Try each comma-separated selector until one resolves to a visible element
+  const selectors = step.cssSelector.split(",").map((s) => s.trim());
+  let el: HTMLElement | null = null;
+
+  for (const sel of selectors) {
+    try {
+      const found = document.querySelector<HTMLElement>(sel);
+      if (found) {
+        const rect = found.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          el = found;
+          break;
+        }
+      }
+    } catch {
+      // Invalid selector — skip
+    }
+  }
+
+  if (!el) {
+    const candidates = Array.from(
+      document.querySelectorAll<HTMLElement>("a, button, [role='button']")
+    );
+    el = candidates.find((candidate) => {
+      const rect = candidate.getBoundingClientRect();
+      const label = (candidate.getAttribute("aria-label") || candidate.textContent || "")
+        .trim()
+        .toLowerCase();
+      return rect.width > 0 && rect.height > 0 && /^(go|start)(\s|$)/.test(label);
+    }) ?? null;
+  }
+
+  if (!el) {
+    return {
+      success: false,
+      message: `No visible element found for selectors: "${step.cssSelector}".`,
+    };
+  }
+
+  el.scrollIntoView({ block: "center", behavior: "smooth" });
+  await new Promise((r) => setTimeout(r, 150));
+
+  if (action === "CLICK") {
+    el.focus();
+    const clickable = el.matches("a, button, [role='button']")
+      ? el
+      : el.querySelector<HTMLElement>("a, button, [role='button']") ?? el;
+    clickable.click();
+    return { success: true, message: `Clicked "${step.cssSelector}".` };
+  }
+
+  if (action === "TYPE") {
+    const input = el as HTMLInputElement;
+    el.focus();
+    setInputValue(input, "");
+    const value = step.value ?? "";
+    for (const char of value) {
+      setInputValue(input, input.value + char);
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: char, bubbles: true }));
+      input.dispatchEvent(new KeyboardEvent("keyup", { key: char, bubbles: true }));
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    return { success: true, message: `Typed "${value}" into "${step.cssSelector}".` };
+  }
+
+  return { success: false, message: `Unknown scripted action: ${action}` };
+}
+
 // Message Listener
-// ---------------------------------------------------------------------------
 
 chrome.runtime.onMessage.addListener((message: CollectStateMessage | ExecuteActionMessage, _sender, sendResponse) => {
+  // Liveness probe used by the executor before collecting state
+  if ((message as { type: string }).type === "__PING__") {
+    sendResponse({ type: "__PONG__" });
+    return false;
+  }
+
   if (message.type === "COLLECT_STATE") {
     const { task, sessionId } = message.payload;
     const state = collectState(task, sessionId);
@@ -269,8 +437,14 @@ chrome.runtime.onMessage.addListener((message: CollectStateMessage | ExecuteActi
     executeAction(action).then((result) => {
       sendResponse({ type: "ACTION_RESULT", payload: result });
     });
-    return true; // Keep channel open for async response
+    return true;
+  }
+
+  if ((message as { type: string }).type === "EXECUTE_SCRIPTED_STEP") {
+    const step = (message as { type: string; payload: unknown }).payload as Parameters<typeof executeScriptedStep>[0];
+    executeScriptedStep(step).then((result) => {
+      sendResponse({ type: "ACTION_RESULT", payload: result });
+    });
+    return true;
   }
 });
-
-console.log("[VisionAgent] Content script loaded.");

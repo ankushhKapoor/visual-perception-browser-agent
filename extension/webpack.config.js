@@ -5,8 +5,8 @@ const CopyPlugin = require("copy-webpack-plugin");
 module.exports = {
   entry: {
     background: "./src/background.ts",
-    content: "./src/content.ts",
-    popup: "./src/popup.ts",
+    content:    "./src/content.ts",
+    popup:      "./src/popup.ts",
   },
   output: {
     path: path.resolve(__dirname, "dist"),
@@ -14,7 +14,7 @@ module.exports = {
     clean: true,
   },
   resolve: {
-    extensions: [".ts", ".js"],
+    extensions: [".ts", ".js", ".json"],
   },
   module: {
     rules: [
@@ -28,9 +28,7 @@ module.exports = {
   plugins: [
     new CopyPlugin({
       patterns: [
-        // Copy manifest and popup HTML
         { from: "public", to: "." },
-        // Copy icon placeholders if they exist
         { from: "public/icons", to: "icons", noErrorOnMissing: true },
       ],
     }),
@@ -39,4 +37,7 @@ module.exports = {
   optimization: {
     splitChunks: false,
   },
+
+  // Chrome MV3 CSP blocks eval() — never use eval-based source maps
+  devtool: false,
 };

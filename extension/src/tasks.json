@@ -1,0 +1,71 @@
+[
+  {
+    "id": "task-001",
+    "description": "Open YouTube, search for Khat song, play first result",
+    "mode": "scripted",
+    "url": "https://www.youtube.com",
+    "openInNewTab": false,
+    "steps": [
+      {
+        "action": "WAIT",
+        "wait_ms": 1500,
+        "note": "Let YouTube fully load"
+      },
+      {
+        "action": "CLICK",
+        "cssSelector": "input#search, input[name='search_query']",
+        "note": "Focus the search bar"
+      },
+      {
+        "action": "TYPE",
+        "cssSelector": "input#search, input[name='search_query']",
+        "value": "Khat song",
+        "note": "Type search query"
+      },
+      {
+        "action": "PRESS_KEY",
+        "key_to_press": "Enter",
+        "note": "Submit the YouTube search with Enter"
+      },
+      {
+        "action": "WAIT",
+        "wait_ms": 3000,
+        "note": "Wait for search results to load"
+      },
+      {
+        "action": "CLICK",
+        "cssSelector": "ytd-video-renderer:first-of-type a#video-title-link, ytd-video-renderer:first-of-type a#video-title, a#video-title-link",
+        "note": "Click the first video result"
+      }
+    ]
+  },
+  {
+    "id": "task-002",
+    "description": "Open Speedtest by Ookla in a new tab and start the test",
+    "mode": "scripted",
+    "url": "https://www.speedtest.net",
+    "openInNewTab": true,
+    "steps": [
+      {
+        "action": "WAIT",
+        "wait_ms": 6000,
+        "note": "Wait for Speedtest to fully load including scripts"
+      },
+      {
+        "action": "CLICK",
+        "cssSelector": "#onetrust-accept-btn-handler, .fc-cta-consent, button.accept-all, [aria-label='Accept All']",
+        "note": "Dismiss cookie/GDPR popup if present — may fail silently if not shown"
+      },
+      {
+        "action": "WAIT",
+        "wait_ms": 1500,
+        "note": "Wait for popup to close"
+      },
+      {
+        "action": "CLICK",
+        "cssSelector": "#main-container .start-button a, #container .start-button a, .start-button a, a.start-button, button.start-button, #startButton, [data-testid='start-button'], button[aria-label*='Go' i], a[aria-label*='Go' i], .start-button",
+        "note": "Click the GO button"
+      }
+    ]
+  }
+]
