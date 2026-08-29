@@ -82,3 +82,17 @@
 
   <button type="submit">Submit</button>
 </form>
+
+<pre id="sanitizer-tests" style="white-space: pre-wrap; margin-top: 2rem; font-family: monospace;"></pre>
+
+<script src="./extensions/src/privacy-classifier.js"></script>
+<script src="./extensions/src/privacy-fusion.js"></script>
+<script src="./extensions/src/privacy-sanitizer.js"></script>
+<script src="./extensions/src/privacy-engine-synthetic-tests.js"></script>
+<script>
+  window.addEventListener('DOMContentLoaded', () => {
+    const output = document.getElementById('sanitizer-tests');
+    const result = window.runPrivacySyntheticSuite();
+    output.textContent = JSON.stringify(result, null, 2);
+  });
+</script>

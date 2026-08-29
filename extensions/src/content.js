@@ -1,7 +1,44 @@
-console.log(
-  "Visual Perception Browser Agent: content script loaded",
-  chrome.runtime.id
-);
+import {
+  classifyInputElement,
+  classifyTextPattern,
+  getRecommendedRedactionAction,
+  enrichDetection,
+  runAllDeterministicDetectors,
+  REDACTION_ACTIONS,
+  isValidLuhn
+} from "./privacy-classifier.js";
+
+import {
+  isCriticalSecret,
+  shouldSanitize,
+  SECRET_PLACEHOLDER
+} from "./privacy-sanitizer.js";
+
+import {
+  runFusionEngine,
+  normalizeDetection,
+  formatDetectionForDebug,
+  convertRectToCanonical,
+  getScreenshotMetrics
+} from "./privacy-fusion.js";
+
+import {
+  sanitizeText as sanitizeTextWithPlaceholders,
+  createSanitizationReport,
+  generatePlaceholder
+} from "./privacy-sanitizer.js";
+
+import {
+  detectOCRTextRegions,
+  isOCREnabled
+} from "./local-ocr.js";
+
+if (typeof chrome !== "undefined" && chrome.runtime) {
+  console.log(
+    "Visual Perception Browser Agent: content script loaded",
+    chrome.runtime.id
+  );
+}
 
 let elementCounter = 0;
 
@@ -640,25 +677,40 @@ function getSensitiveInputElements() {
         element
       );
     })
-    .map((element) => ({
-      source:
-        "input",
+    .map((element) => {
+      const detection = {
+        source:
+          "input",
 
-      tag:
-        element.tagName.toLowerCase(),
+        tag:
+          element.tagName.toLowerCase(),
 
-      type:
-        element.type || null,
+        type:
+          element.type || null,
 
-      name:
-        element.name || null,
+        name:
+          element.name || null,
 
-      id:
-        element.id || null,
+        id:
+          element.id || null,
 
-      rect:
-        getElementRect(element)
-    }));
+        rect:
+          getElementRect(element)
+      };
+
+      // Classify the sensitive input
+      const classification = classifyInputElement({
+        type: element.type || null,
+        name: element.name || null,
+        id: element.id || null,
+        placeholder: element.placeholder || null,
+        ariaLabel: element.getAttribute("aria-label"),
+        autocomplete: element.autocomplete || null
+      });
+
+      // Enrich detection with classification data
+      return enrichDetection(detection, classification);
+    });
 }
 
 function getPIIPatterns() {
@@ -688,16 +740,32 @@ function containsPII(text) {
   const patterns =
     getPIIPatterns();
 
-  return Object.values(
+  // Check regex patterns first
+  const hasRegexPII = Object.values(
     patterns
   ).some((pattern) => {
     pattern.lastIndex = 0;
 
     return pattern.test(text);
   });
+
+  if (hasRegexPII) {
+    return true;
+  }
+
+  // Check deterministic detectors
+  const deterministicDetections =
+    runAllDeterministicDetectors(text);
+
+  return deterministicDetections.length > 0;
 }
 
-function sanitizeText(text) {
+/**
+ * Legacy text sanitization (replaces with [REDACTED])
+ * Kept for backward compatibility
+ * Use sanitizeTextWithPlaceholders for new code
+ */
+function sanitizeTextLegacy(text) {
   if (!text) {
     return text;
   }
@@ -723,6 +791,131 @@ function sanitizeText(text) {
   return sanitizedText;
 }
 
+/**
+ * Find text positions for detected PII values in full text
+ * Returns detections with startIndex and endIndex populated
+ * @param {string} fullText - Full visible text from page
+ * @param {array} detections - Detection objects with 'text' or 'value' properties
+ * @returns {array} Detections with startIndex/endIndex added
+ */
+function enrichDetectionsWithPositions(fullText, detections) {
+  if (!fullText || !Array.isArray(detections)) {
+    return Array.isArray(detections) ? detections : [];
+  }
+
+  const enriched = [];
+
+  detections.forEach((det) => {
+    if (!det) {
+      return;
+    }
+
+    if (det.startIndex !== undefined && det.endIndex !== undefined) {
+      enriched.push(det);
+      return;
+    }
+
+    const searchText = det.value || det.text || det.match || det.originalValue;
+    if (!searchText || typeof searchText !== 'string') {
+      return;
+    }
+
+    let cursor = 0;
+    let foundMatch = false;
+
+    while (cursor <= fullText.length) {
+      const index = fullText.indexOf(searchText, cursor);
+      if (index === -1) {
+        break;
+      }
+
+      foundMatch = true;
+      enriched.push({
+        ...det,
+        value: searchText,
+        text: searchText,
+        startIndex: index,
+        endIndex: index + searchText.length
+      });
+
+      cursor = index + Math.max(searchText.length, 1);
+    }
+
+    if (!foundMatch) {
+      enriched.push(det);
+    }
+  });
+
+  return enriched.filter(
+    (det) => det.startIndex !== undefined && det.endIndex !== undefined
+  );
+}
+
+/**
+ * Sanitize page text using privacy detections with proper placeholders
+ * @param {string} visibleText - Full visible text from page
+ * @param {array} sensitiveElements - Detected sensitive elements from fusion engine
+ * @returns {object} { sanitized: string, report: {}, piiTypeCounts: {} }
+ */
+function sanitizePageText(visibleText, sensitiveElements) {
+  if (!visibleText) {
+    return {
+      sanitized: visibleText,
+      report: {},
+      piiTypeCounts: {},
+      sanitizationCount: 0
+    };
+  }
+
+  if (!Array.isArray(sensitiveElements) || sensitiveElements.length === 0) {
+    return {
+      sanitized: visibleText,
+      report: {},
+      piiTypeCounts: {},
+      sanitizationCount: 0
+    };
+  }
+
+  try {
+    // Enrich detections with text positions
+    const enriched = enrichDetectionsWithPositions(visibleText, sensitiveElements);
+
+    // Sanitize using privacy-sanitizer
+    const result = sanitizeTextWithPlaceholders(visibleText, enriched);
+
+    // Create report for logging
+    const report = createSanitizationReport(enriched);
+
+    // Do not log raw matches or the original sensitive text.
+    console.log(
+      "Privacy Sanitization Report:",
+      {
+        totalDetections: report.totalDetections,
+        sanitized: report.sanitized,
+        byType: report.byType,
+        bySeverity: report.bySeverity
+      }
+    );
+
+    return {
+      sanitized: result.sanitized,
+      report,
+      piiTypeCounts: result.piiTypeCounts || {},
+      sanitizationCount: result.sanitizationCount || 0,
+      mapping: result.mapping || {}
+    };
+  } catch (error) {
+    console.error("Error sanitizing page text:", error);
+    return {
+      sanitized: visibleText,
+      report: {},
+      piiTypeCounts: {},
+      sanitizationCount: 0,
+      error: error.message
+    };
+  }
+}
+
 function getSensitiveTextElements() {
   const excludedTags = new Set([
     "SCRIPT",
@@ -733,6 +926,8 @@ function getSensitiveTextElements() {
     "SELECT",
     "OPTION"
   ]);
+
+  const patterns = getPIIPatterns();
 
   return Array.from(
     document.querySelectorAll("body *")
@@ -771,14 +966,8 @@ function getSensitiveTextElements() {
         directText
       );
     })
-    .map((element) => ({
-      source:
-        "text",
-
-      tag:
-        element.tagName.toLowerCase(),
-
-      text:
+    .map((element) => {
+      const directText =
         Array.from(
           element.childNodes
         )
@@ -792,18 +981,298 @@ function getSensitiveTextElements() {
           )
           .filter(Boolean)
           .join(" ")
-          .slice(0, 200),
+          .slice(0, 200);
 
-      rect:
-        getElementRect(element)
+      const detection = {
+        source:
+          "text",
+
+        tag:
+          element.tagName.toLowerCase(),
+
+        text:
+          directText,
+
+        rect:
+          getElementRect(element)
+      };
+
+      // Find which PII pattern matched (existing regex patterns)
+      let matchedPatternType = null;
+      for (const [patternType, pattern] of Object.entries(patterns)) {
+        pattern.lastIndex = 0;
+        
+        if (pattern.test(directText)) {
+          // For card numbers, validate with Luhn algorithm
+          if (patternType === "card") {
+            // Extract the card number and validate with Luhn
+            const cardPattern = /\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}/;
+            const cardMatch = directText.match(cardPattern);
+            
+            if (cardMatch) {
+              const cardNumberOnly = cardMatch[0].replace(/[\s-]/g, "");
+              
+              // Validate using Luhn algorithm
+              if (isValidLuhn(cardNumberOnly)) {
+                matchedPatternType = patternType;
+                break;
+              }
+            }
+          } else {
+            matchedPatternType = patternType;
+            break;
+          }
+        }
+      }
+
+      // Classify based on matched pattern
+      let classification = null;
+      if (matchedPatternType) {
+        classification = classifyTextPattern({
+          text: directText,
+          patternType: matchedPatternType
+        });
+        
+        return enrichDetection(detection, classification);
+      }
+
+      // Run deterministic detectors on remaining text
+      const deterministicDetections =
+        runAllDeterministicDetectors(directText);
+
+      // Return first detection if any found
+      if (deterministicDetections.length > 0) {
+        const det = deterministicDetections[0];
+        
+        return enrichDetection(detection, {
+          type: det.piiType,
+          severity: det.severity,
+          confidence: det.confidence,
+          recommendedAction:
+            REDACTION_ACTIONS[det.severity],
+          reason: det.context
+        });
+      }
+
+      // No PII detected in this element
+      return null;
+    })
+    .filter(Boolean);
+}
+
+async function detectFacesInScreenshot(dataUrl, options = {}) {
+  const mockFaces = globalThis.__PRIVACY_TEST_FACE_DETECTIONS__;
+  if (Array.isArray(mockFaces) && mockFaces.length > 0) {
+    return mockFaces.map((face) => ({
+      piiType: "FACE",
+      type: "FACE",
+      severity: "HIGH",
+      action: "BLUR",
+      confidence: Number(face.confidence ?? 0.8),
+      source: "FACE",
+      rect: {
+        x: Number(face.x ?? 0),
+        y: Number(face.y ?? 0),
+        width: Number(face.width ?? 0),
+        height: Number(face.height ?? 0)
+      },
+      boundingBox: {
+        x: Number(face.x ?? 0),
+        y: Number(face.y ?? 0),
+        width: Number(face.width ?? 0),
+        height: Number(face.height ?? 0)
+      },
+      finalRedactionAction: "BLUR",
+      reason: "Mocked local face detection",
+      sourceCount: 1,
+      fusedCount: 1,
+      safetyMarginApplied: false
     }));
+  }
+
+  if (typeof window === "undefined") {
+    return [];
+  }
+
+  try {
+    if ("FaceDetector" in window) {
+      const response = await fetch(dataUrl);
+      const blob = await response.blob();
+      const imageBitmap = await createImageBitmap(blob);
+      const faceDetector = new FaceDetector({
+        fastMode: true,
+        maxDetectedFaces: 10,
+        scoreThreshold: 0.5
+      });
+
+      const detectedFaces = await faceDetector.detect(imageBitmap);
+      imageBitmap.close?.();
+
+      const screenshotMetrics = getScreenshotMetrics({
+        screenshotWidth: imageBitmap.width,
+        screenshotHeight: imageBitmap.height,
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
+        scrollX: window.scrollX,
+        scrollY: window.scrollY,
+        devicePixelRatio: window.devicePixelRatio,
+        zoomScale: window.visualViewport ? window.visualViewport.scale : 1
+      });
+
+      return detectedFaces.map((face) => {
+        const box = face.boundingBox || {};
+        const rect = convertRectToCanonical(
+          {
+            x: box.x || 0,
+            y: box.y || 0,
+            width: box.width || 0,
+            height: box.height || 0
+          },
+          "face",
+          screenshotMetrics
+        );
+
+        return {
+          piiType: "FACE",
+          type: "FACE",
+          severity: "HIGH",
+          action: "BLUR",
+          confidence: Number((face.score ?? 0.8).toFixed(3)),
+          source: "FACE",
+          rect,
+          boundingBox: rect,
+          finalRedactionAction: "BLUR",
+          reason: "Local browser face detection",
+          sourceCount: 1,
+          fusedCount: 1,
+          safetyMarginApplied: false
+        };
+      });
+    }
+
+    if (window.FaceLandmarker || window.__PRIVACY_MEDIA_PIPE_FACE_LANDMARKER__) {
+      const faceLandmarker = window.__PRIVACY_MEDIA_PIPE_FACE_LANDMARKER__ || window.FaceLandmarker;
+      if (faceLandmarker && typeof faceLandmarker.detect === "function") {
+        const response = await fetch(dataUrl);
+        const blob = await response.blob();
+        const imageBitmap = await createImageBitmap(blob);
+        const result = faceLandmarker.detect(imageBitmap);
+        const boxes = Array.isArray(result?.faceLandmarks) ? result.faceLandmarks : [];
+        imageBitmap.close?.();
+
+        return boxes.map((landmarks, index) => {
+          const points = landmarks || [];
+          const xs = points.map((point) => Number(point?.x ?? 0));
+          const ys = points.map((point) => Number(point?.y ?? 0));
+          const minX = Math.min(...xs, 0);
+          const maxX = Math.max(...xs, 0);
+          const minY = Math.min(...ys, 0);
+          const maxY = Math.max(...ys, 0);
+          const rect = convertRectToCanonical(
+            {
+              x: minX,
+              y: minY,
+              width: Math.max(1, maxX - minX),
+              height: Math.max(1, maxY - minY)
+            },
+            "face",
+            getScreenshotMetrics({
+              screenshotWidth: options.screenshotWidth || window.innerWidth * window.devicePixelRatio,
+              screenshotHeight: options.screenshotHeight || window.innerHeight * window.devicePixelRatio,
+              viewportWidth: window.innerWidth,
+              viewportHeight: window.innerHeight,
+              scrollX: window.scrollX,
+              scrollY: window.scrollY,
+              devicePixelRatio: window.devicePixelRatio,
+              zoomScale: window.visualViewport ? window.visualViewport.scale : 1
+            })
+          );
+
+          return {
+            piiType: "FACE",
+            type: "FACE",
+            severity: "HIGH",
+            action: "BLUR",
+            confidence: Number((0.8 + (index * 0.05)).toFixed(3)),
+            source: "FACE",
+            rect,
+            boundingBox: rect,
+            finalRedactionAction: "BLUR",
+            reason: "Local MediaPipe face detection",
+            sourceCount: 1,
+            fusedCount: 1,
+            safetyMarginApplied: false
+          };
+        });
+      }
+    }
+
+    console.warn("Face detection is not available in this browser; local face detection is skipped.");
+    return [];
+  } catch (error) {
+    console.warn("Local face detection failed:", error.message || error);
+    return [];
+  }
 }
 
 function getSensitiveElements() {
-  return [
-    ...getSensitiveInputElements(),
-    ...getSensitiveTextElements()
-  ];
+  const domDetections =
+    getSensitiveInputElements();
+
+  const textDetections =
+    getSensitiveTextElements();
+
+  console.log(
+    "Privacy Fusion Engine Input:",
+    {
+      domDetections: domDetections.length,
+      textDetections: textDetections.length,
+      totalPreFusion:
+        domDetections.length +
+        textDetections.length
+    }
+  );
+
+  // Run privacy fusion engine to combine detections
+  // The fusion engine:
+  // 1. Normalizes all detections
+  // 2. Spatially fuses overlapping detections
+  // 3. Applies severity priority
+  // 4. Adds safety margins
+  // 5. Computes final redaction actions
+  const fusedDetections =
+    runFusionEngine(
+      domDetections,
+      textDetections,
+      [], // ocrDetections (not available yet)
+      [], // mlDetections (not available yet)
+      [], // faceDetections (not available yet)
+      {
+        overlapThreshold: 0.1,
+        proximityThreshold: 50,
+        safetyMarginPercent: 10
+      }
+    );
+
+  console.log(
+    "Privacy Fusion Engine Output:",
+    {
+      fusedDetections:
+        fusedDetections.length,
+      reductionRatio:
+        (
+          (
+            (domDetections.length +
+              textDetections.length -
+              fusedDetections.length) /
+            (domDetections.length +
+              textDetections.length)
+          ) * 100
+        ).toFixed(1) + "%"
+    }
+  );
+
+  return fusedDetections;
 }
 
 function extractPageContext() {
@@ -1008,6 +1477,259 @@ function sanitizeForms(
   }));
 }
 
+const RAW_VALUE_KEYS = new Set([
+  "value",
+  "text",
+  "match",
+  "originalvalue",
+  "originalValue",
+  "rawvalue",
+  "rawValue",
+  "rawvalues",
+  "rawValues",
+  "fulltext",
+  "fullText",
+  "sourceText",
+  "sourcetext"
+]);
+
+function stripRawSensitiveFields(value) {
+  if (value === null || value === undefined) {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => stripRawSensitiveFields(item));
+  }
+
+  if (typeof value !== "object") {
+    return value;
+  }
+
+  const sanitized = {};
+
+  Object.entries(value).forEach(([key, nestedValue]) => {
+    const normalizedKey = String(key).toLowerCase();
+    if (RAW_VALUE_KEYS.has(key) || RAW_VALUE_KEYS.has(normalizedKey)) {
+      return;
+    }
+
+    sanitized[key] = stripRawSensitiveFields(nestedValue);
+  });
+
+  return sanitized;
+}
+
+function containsRawSensitiveFields(value) {
+  if (value === null || value === undefined) {
+    return false;
+  }
+
+  if (Array.isArray(value)) {
+    return value.some((item) => containsRawSensitiveFields(item));
+  }
+
+  if (typeof value !== "object") {
+    return false;
+  }
+
+  return Object.entries(value).some(([key, nestedValue]) => {
+    const normalizedKey = String(key).toLowerCase();
+    if (RAW_VALUE_KEYS.has(key) || RAW_VALUE_KEYS.has(normalizedKey)) {
+      return true;
+    }
+
+    return containsRawSensitiveFields(nestedValue);
+  });
+}
+
+function collectStringValues(value, results = []) {
+  if (value === null || value === undefined) {
+    return results;
+  }
+
+  if (typeof value === "string") {
+    if (value.trim()) {
+      results.push(value);
+    }
+    return results;
+  }
+
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectStringValues(item, results));
+    return results;
+  }
+
+  if (typeof value === "object") {
+    Object.values(value).forEach((item) => collectStringValues(item, results));
+  }
+
+  return results;
+}
+
+function looksLikeSensitiveString(value) {
+  if (typeof value !== "string") {
+    return false;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length < 4) {
+    return false;
+  }
+
+  if (/^<\w+_\d+>$/.test(trimmed) || trimmed === SECRET_PLACEHOLDER || trimmed === "[REDACTED]") {
+    return false;
+  }
+
+  const groupedDetections = runAllDeterministicDetectors(trimmed);
+  if (groupedDetections.length > 0) {
+    return true;
+  }
+
+  const lower = trimmed.toLowerCase();
+  const suspiciousMarkers = [
+    "password",
+    "otp",
+    "api key",
+    "secret",
+    "authorization",
+    "bearer",
+    "session token",
+    "ssn",
+    "aadhaar",
+    "pan number",
+    "email is",
+    "phone is",
+    "dob",
+    "date of birth",
+    "address",
+    "full name"
+  ];
+
+  return suspiciousMarkers.some((marker) => lower.includes(marker));
+}
+
+function createSafeOutputContract(payload) {
+  if (!payload || typeof payload !== "object") {
+    return {
+      allowed: false,
+      decision: "BLOCK",
+      safeSummary: { blocked: true, reason: "Invalid payload" }
+    };
+  }
+
+  const safePayload = {
+    visualContext: {
+      sanitizedScreenshot: Boolean(payload.visualContext?.sanitizedScreenshot),
+      sanitizedScreenshotLength: payload.visualContext?.sanitizedScreenshot ? payload.visualContext.sanitizedScreenshot.length : 0
+    },
+    domContext: {
+      visibleTextSanitized: Boolean(payload.domContext?.visibleText),
+      elementCount: payload.domContext?.elements?.length ?? 0,
+      interactiveElementCount: payload.domContext?.interactiveElements?.length ?? 0,
+      formCount: payload.domContext?.forms?.length ?? 0
+    },
+    privacy: {
+      piiDetected: Boolean(payload.privacy?.piiDetected),
+      redactedRegionCount: payload.privacy?.redactedRegionCount ?? 0,
+      severitySummary: payload.privacy?.severitySummary ?? {},
+      piiTypesSummary: payload.privacy?.piiTypesSummary ?? {},
+      rawScreenshotIncluded: false
+    },
+    redactionMetadata: (payload.privacy?.redactedRegions || []).map((region) => ({
+      piiType: region.piiType,
+      severity: region.severity,
+      confidence: region.confidence,
+      action: region.finalRedactionAction,
+      source: region.source || "fused",
+      elementId: region.elementId || null,
+      rect: region.rect ? {
+        x: Number(region.rect.x),
+        y: Number(region.rect.y),
+        width: Number(region.rect.width),
+        height: Number(region.rect.height)
+      } : null
+    })),
+    safety: {
+      rawValueFieldsRemoved: true,
+      sanitizationBoundary: "safe-summary-only"
+    }
+  };
+
+  return stripRawSensitiveFields(safePayload);
+}
+
+function finalPrivacyGate(payload) {
+  if (!payload || typeof payload !== "object") {
+    return {
+      allowed: false,
+      decision: "BLOCK",
+      reason: "Invalid payload",
+      safeSummary: { blocked: true }
+    };
+  }
+
+  const safePayload = createSafeOutputContract(payload);
+  const rawSensitiveFieldsDetected = containsRawSensitiveFields(payload);
+  const allStringValues = collectStringValues(payload);
+  const suspiciousStrings = allStringValues.filter((value) => looksLikeSensitiveString(value));
+
+  const hasMissingSanitizedFlags =
+    payload.privacy?.rawScreenshotIncluded === true ||
+    payload.visualContext?.sanitizedScreenshot === undefined;
+
+  if (rawSensitiveFieldsDetected) {
+    return {
+      allowed: false,
+      decision: "BLOCK",
+      reason: "Unsafe raw fields detected in payload",
+      safeSummary: {
+        blocked: true,
+        reason: "Raw value fields were found in the payload",
+        redactedRegionCount: payload.privacy?.redactedRegionCount ?? 0
+      }
+    };
+  }
+
+  if (hasMissingSanitizedFlags) {
+    return {
+      allowed: false,
+      decision: "BLOCK",
+      reason: "Payload missing required sanitized output",
+      safeSummary: {
+        blocked: true,
+        reason: "Missing sanitized screenshot",
+        redactedRegionCount: payload.privacy?.redactedRegionCount ?? 0
+      }
+    };
+  }
+
+  if (suspiciousStrings.length > 0) {
+    return {
+      allowed: false,
+      decision: "BLOCK",
+      reason: "Sensitive data detected during final privacy gate",
+      safeSummary: {
+        blocked: true,
+        suspiciousScanCount: suspiciousStrings.length,
+        redactedRegionCount: payload.privacy?.redactedRegionCount ?? 0,
+        piiTypesSummary: payload.privacy?.piiTypesSummary ?? {}
+      }
+    };
+  }
+
+  return {
+    allowed: true,
+    decision: "ALLOW",
+    reason: "Final privacy gate passed",
+    safeSummary: {
+      ...safePayload,
+      allowed: true,
+      decision: "ALLOW"
+    }
+  };
+}
+
 function createSanitizedPayload(
   pageContext,
   sanitizedScreenshot
@@ -1045,9 +1767,10 @@ function createSanitizedPayload(
 
     domContext: {
       visibleText:
-        sanitizeText(
-          pageContext.visibleText
-        ),
+        sanitizePageText(
+          pageContext.visibleText,
+          pageContext.sensitiveElements
+        ).sanitized,
 
       elements:
         sanitizedDomElements,
@@ -1076,19 +1799,70 @@ function createSanitizedPayload(
         pageContext.sensitiveElements
           .length > 0,
 
+      sanitizationReport:
+        sanitizePageText(
+          pageContext.visibleText,
+          pageContext.sensitiveElements
+        ).report,
+
       redactedRegions:
         pageContext.sensitiveElements
           .map((element) => ({
-            source:
-              element.source,
+            piiType:
+              element.piiType || "UNKNOWN",
+
+            severity:
+              element.severity || "UNKNOWN",
+
+            confidence:
+              element.confidence !== undefined ? element.confidence : null,
+
+            finalRedactionAction:
+              element.finalRedactionAction ||
+              element.recommendedAction ||
+              "BLACKOUT",
 
             rect:
-              element.rect
+              element.rect,
+
+            fusedCount:
+              element.fusedCount || 1,
+
+            sourceCount:
+              element.sourceCount || 1,
+
+            safetyMarginApplied:
+              element.safetyMarginApplied || false
           })),
 
       redactedRegionCount:
         pageContext.sensitiveElements
           .length,
+
+      severitySummary: {
+        critical:
+          pageContext.sensitiveElements.filter(
+            (e) => e.severity === "CRITICAL"
+          ).length,
+
+        high:
+          pageContext.sensitiveElements.filter(
+            (e) => e.severity === "HIGH"
+          ).length,
+
+        contextDependent:
+          pageContext.sensitiveElements.filter(
+            (e) => e.severity === "CONTEXT_DEPENDENT"
+          ).length
+      },
+
+      piiTypesSummary:
+        pageContext.sensitiveElements
+          .reduce((acc, element) => {
+            const type = element.piiType || "UNKNOWN";
+            acc[type] = (acc[type] || 0) + 1;
+            return acc;
+          }, {}),
 
       rawScreenshotIncluded:
         false
@@ -1105,7 +1879,18 @@ function redactScreenshot(
 ) {
   return new Promise(
     (resolve, reject) => {
-      const image = new Image();
+      const ImageCtor = typeof globalThis !== "undefined" ? globalThis.Image : undefined;
+
+      if (!ImageCtor) {
+        reject(
+          new Error(
+            "Screenshot redaction requires a browser Image implementation"
+          )
+        );
+        return;
+      }
+
+      const image = new ImageCtor();
 
       image.onload = () => {
         const canvas =
@@ -1138,36 +1923,67 @@ function redactScreenshot(
           0
         );
 
-        const scaleX =
-          image.width /
-          window.innerWidth;
-
-        const scaleY =
-          image.height /
-          window.innerHeight;
-
-        context.fillStyle =
-          "black";
+        const screenshotMetrics = getScreenshotMetrics({
+          screenshotWidth: image.width,
+          screenshotHeight: image.height,
+          viewportWidth: window.innerWidth,
+          viewportHeight: window.innerHeight,
+          scrollX: window.scrollX,
+          scrollY: window.scrollY,
+          devicePixelRatio: window.devicePixelRatio,
+          zoomScale: window.visualViewport ? window.visualViewport.scale : 1
+        });
 
         sensitiveElements.forEach(
           (element) => {
-            const rect =
-              element.rect;
-
-            context.fillRect(
-              Math.round(
-                rect.x * scaleX
-              ),
-              Math.round(
-                rect.y * scaleY
-              ),
-              Math.round(
-                rect.width * scaleX
-              ),
-              Math.round(
-                rect.height * scaleY
-              )
+            const rect = convertRectToCanonical(
+              element.rect,
+              element.source || "dom",
+              screenshotMetrics
             );
+
+            const x = Math.round(rect.x);
+            const y = Math.round(rect.y);
+            const width = Math.round(rect.width);
+            const height = Math.round(rect.height);
+
+            // Apply redaction based on final action from fusion engine
+            const redactionAction =
+              element.finalRedactionAction ||
+              element.recommendedAction ||
+              "BLACKOUT";
+
+            if (
+              redactionAction === "BLACKOUT"
+            ) {
+              // Solid black fill for critical PII
+              context.fillStyle = "black";
+              context.fillRect(x, y, width, height);
+            } else if (
+              redactionAction === "MASK"
+            ) {
+              // Dark gray fill for high-severity PII
+              context.fillStyle = "#444444";
+              context.fillRect(x, y, width, height);
+
+              // Add a semi-transparent overlay
+              context.fillStyle = "rgba(0, 0, 0, 0.3)";
+              context.fillRect(x, y, width, height);
+            } else if (
+              redactionAction === "PLACEHOLDER"
+            ) {
+              // Medium gray fill for context-dependent PII
+              context.fillStyle = "#999999";
+              context.fillRect(x, y, width, height);
+            } else if (
+              redactionAction === "BLUR"
+            ) {
+              context.save();
+              context.filter = "blur(8px)";
+              context.fillStyle = "rgba(0, 0, 0, 0.9)";
+              context.fillRect(x, y, width, height);
+              context.restore();
+            }
           }
         );
 
@@ -1192,158 +2008,241 @@ function redactScreenshot(
 }
 
 function captureScreenshot(
-  pageContext
+  pageContext,
+  options = {}
 ) {
-  chrome.runtime.sendMessage(
-    {
-      type:
-        "CAPTURE_SCREENSHOT"
-    },
-    async (response) => {
-      if (
-        chrome.runtime.lastError
-      ) {
-        console.error(
-          "Could not communicate with background script:",
-          chrome.runtime.lastError
-            .message
-        );
+  const {
+    userInitiated = false
+  } = options;
 
-        return;
-      }
+  if (!userInitiated) {
+    return Promise.resolve({
+      success: false,
+      error: "Screenshot capture requires an explicit user-initiated extension action."
+    });
+  }
 
-      if (
-        !response?.success
-      ) {
-        console.error(
-          "Screenshot capture failed:",
-          response?.error
-        );
+  const chromeApi = typeof globalThis !== "undefined" ? globalThis.chrome : undefined;
+  if (!chromeApi || !chromeApi.runtime || !chromeApi.runtime.sendMessage) {
+    return Promise.resolve({
+      success: false,
+      error: "Screenshot capture requires a Chrome runtime context."
+    });
+  }
 
-        return;
-      }
+  return new Promise(
+    (resolve, reject) => {
+      chromeApi.runtime.sendMessage(
+        {
+          type:
+            "CAPTURE_SCREENSHOT",
+          source: "user-invoked"
+        },
+        async (response) => {
+          if (
+            chromeApi.runtime.lastError
+          ) {
+            console.error(
+              "Could not communicate with background script:",
+              chromeApi.runtime.lastError
+                .message
+            );
 
-      try {
-        console.log(
-          "Screenshot captured successfully"
-        );
+            resolve({
+              success: false,
+              error: chromeApi.runtime.lastError.message
+            });
 
-        const sanitizedScreenshot =
-          await redactScreenshot(
-            response.screenshot,
-            pageContext.sensitiveElements
-          );
-
-        console.log(
-          "Screenshot sanitized successfully"
-        );
-
-        console.log(
-          "Sensitive regions redacted:",
-          pageContext
-            .sensitiveElements
-            .length
-        );
-
-        const finalPayload =
-          createSanitizedPayload(
-            pageContext,
-            sanitizedScreenshot
-          );
-
-        console.log(
-          "FINAL SANITIZED PAYLOAD:"
-        );
-
-        console.log(
-          finalPayload
-        );
-
-        console.log(
-          "Final payload summary:",
-          {
-            domElements:
-              finalPayload.domContext
-                .elements.length,
-
-            interactiveElements:
-              finalPayload.domContext
-                .interactiveElements
-                .length,
-
-            forms:
-              finalPayload.domContext
-                .forms.length,
-
-            redactedRegions:
-              finalPayload.privacy
-                .redactedRegionCount,
-
-            piiDetected:
-              finalPayload.privacy
-                .piiDetected,
-
-            rawScreenshotIncluded:
-              finalPayload.privacy
-                .rawScreenshotIncluded
+            return;
           }
-        );
 
-        console.log(
-          "Sanitized payload is ready for Team Member 2"
-        );
-      } catch (error) {
-        console.error(
-          "Local screenshot redaction failed:",
-          error.message
-        );
-      }
+          if (
+            !response?.success
+          ) {
+            console.error(
+              "Screenshot capture failed:",
+              response?.error
+            );
+
+            resolve({
+              success: false,
+              error: response?.error || "Screenshot capture failed"
+            });
+
+            return;
+          }
+
+          try {
+            console.log(
+              "Screenshot captured successfully"
+            );
+
+            const ocrEnabled = isOCREnabled({
+              enabled: Boolean(window.__ENABLE_LOCAL_OCR__)
+            });
+
+            const ocrDetections = ocrEnabled
+              ? await detectOCRTextRegions(response.screenshot, {
+                  enabled: true
+                })
+              : [];
+
+            const faceDetections =
+              await detectFacesInScreenshot(
+                response.screenshot
+              );
+
+            const fusedSensitiveElements =
+              runFusionEngine(
+                pageContext.sensitiveElements || [],
+                [],
+                ocrDetections,
+                [],
+                faceDetections,
+                {
+                  overlapThreshold: 0.1,
+                  proximityThreshold: 50,
+                  safetyMarginPercent: 10
+                }
+              );
+
+            const sensitiveElements = fusedSensitiveElements;
+
+            const sanitizedScreenshot =
+              await redactScreenshot(
+                response.screenshot,
+                sensitiveElements
+              );
+
+            console.log(
+              "Screenshot sanitized successfully"
+            );
+
+            console.log(
+              "Sensitive regions redacted:",
+              sensitiveElements.length
+            );
+
+            const finalPayload =
+              createSanitizedPayload(
+                {
+                  ...pageContext,
+                  sensitiveElements
+                },
+                sanitizedScreenshot
+              );
+
+            const gateDecision = finalPrivacyGate(finalPayload);
+
+            if (!gateDecision.allowed) {
+              console.warn(
+                "Final privacy gate blocked outbound payload:",
+                gateDecision.safeSummary
+              );
+              resolve({
+                success: false,
+                error: gateDecision.reason,
+                gate: gateDecision
+              });
+              return;
+            }
+
+            console.log(
+              "Final privacy gate passed:",
+              createSafeOutputContract(finalPayload)
+            );
+
+            console.log(
+              "Sanitized payload summary:",
+              {
+                domElements:
+                  finalPayload.domContext
+                    .elements.length,
+
+                interactiveElements:
+                  finalPayload.domContext
+                    .interactiveElements
+                    .length,
+
+                forms:
+                  finalPayload.domContext
+                    .forms.length,
+
+                redactedRegions:
+                  finalPayload.privacy
+                    .redactedRegionCount,
+
+                piiDetected:
+                  finalPayload.privacy
+                    .piiDetected,
+
+                rawScreenshotIncluded:
+                  finalPayload.privacy
+                    .rawScreenshotIncluded
+              }
+            );
+
+            resolve({
+              success: true,
+              screenshot: sanitizedScreenshot,
+              payload: finalPayload,
+              gate: gateDecision
+            });
+          } catch (error) {
+            console.error(
+              "Local screenshot redaction failed:",
+              error.message
+            );
+
+            reject(error);
+          }
+        }
+      );
     }
   );
 }
 
-const pageContext =
-  extractPageContext();
+if (
+  typeof window !== "undefined" &&
+  typeof document !== "undefined" &&
+  typeof document.querySelectorAll === "function" &&
+  typeof chrome !== "undefined" &&
+  chrome.runtime &&
+  window.__ALLOW_PRIVACY_CAPTURE__ === true
+) {
+  const pageContext =
+    extractPageContext();
 
-console.log("Page Context:");
-console.log(pageContext);
+  console.log(
+    "Privacy pipeline initialized:",
+    {
+      domElementCount:
+        pageContext.domElements.length,
+      formCount:
+        pageContext.forms.length,
+      viewport:
+        pageContext.viewport,
+      piiDetectionCount:
+        pageContext.sensitiveElements.length
+    }
+  );
 
-console.log(
-  "Page Context JSON:\n",
-  JSON.stringify(
+  captureScreenshot(
     pageContext,
-    null,
-    2
-  )
-);
+    { userInitiated: true }
+  );
+}
 
-console.log(
-  "DOM Elements JSON:\n",
-  JSON.stringify(
-    pageContext.domElements,
-    null,
-    2
-  )
-);
-
-console.log(
-  "DOM elements extracted:",
-  pageContext
-    .domElements.length
-);
-
-console.log(
-  "Forms extracted:",
-  pageContext.forms.length
-);
-
-console.log(
-  "Accessibility extracted for:",
-  pageContext
-    .domElements.length,
-  "elements"
-);
-
-captureScreenshot(
-  pageContext
-);
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = {
+    extractPageContext,
+    sanitizePageText,
+    createSanitizedPayload,
+    createSafeOutputContract,
+    finalPrivacyGate,
+    getSensitiveElements,
+    captureScreenshot,
+    redactScreenshot,
+    detectFacesInScreenshot
+  };
+}

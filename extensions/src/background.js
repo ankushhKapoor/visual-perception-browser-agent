@@ -6,9 +6,11 @@ console.log(
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   console.log(
     "Background received message:",
-    message,
-    "Extension ID:",
-    chrome.runtime.id
+    {
+      type: message?.type ?? "unknown",
+      tabId: sender?.tab?.id ?? null,
+      extensionId: chrome.runtime.id
+    }
   );
 
   if (message.type === "CAPTURE_SCREENSHOT") {
