@@ -5,6 +5,7 @@ Swap out DummyPlanner for a VLM-backed planner without touching the router.
 """
 
 from abc import ABC, abstractmethod
+from typing import Awaitable
 
 from models.schemas import AgentStepRequest, AgentAction
 
@@ -13,7 +14,9 @@ class BasePlanner(ABC):
     """Interface that every planner must implement."""
 
     @abstractmethod
-    def plan(self, context: AgentStepRequest) -> tuple[AgentAction, str]:
+    def plan(
+        self, context: AgentStepRequest
+    ) -> tuple[AgentAction, str] | Awaitable[tuple[AgentAction, str]]:
         """
         Given the current browser context, decide the next action.
 

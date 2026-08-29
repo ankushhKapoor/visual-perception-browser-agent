@@ -50,6 +50,21 @@ pip install -r requirements.txt
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
+The backend uses a separate OpenAI-compatible VLM server by default. Start a
+Qwen vision model with vLLM on port 8001, then start the backend:
+
+```bash
+vllm serve Qwen/Qwen2.5-VL-3B-Instruct --port 8001
+cd backend
+set PLANNER_MODE=vlm
+set VLM_BASE_URL=http://localhost:8001/v1
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```
+
+On PowerShell, use `$env:PLANNER_MODE="vlm"` and
+`$env:VLM_BASE_URL="http://localhost:8001/v1"`. Set `PLANNER_MODE=dummy` to
+run without a VLM server.
+
 Swagger UI available at: http://localhost:8000/docs
 
 ### 2. Chrome Extension
