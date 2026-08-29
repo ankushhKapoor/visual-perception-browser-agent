@@ -1,0 +1,98 @@
+<form action="/submit" method="post">
+  <label>
+    Search
+    <input
+      type="text"
+      name="search"
+      placeholder="Search products"
+    />
+  </label>
+
+  <br /><br />
+
+  <label>
+    Favourite Color
+    <input
+      type="text"
+      name="favorite_color"
+      placeholder="Enter your favourite color"
+    />
+  </label>
+
+  <h2>Sensitive Fields — Should be detected</h2>
+
+  <label>
+    Email
+    <input
+      type="email"
+      name="email"
+      autocomplete="email"
+      placeholder="example@email.com"
+    />
+  </label>
+
+  <br /><br />
+
+  <label>
+    Password
+    <input
+      type="password"
+      name="password"
+      autocomplete="current-password"
+    />
+  </label>
+
+  <br /><br />
+
+  <label>
+    Phone Number
+    <input
+      type="tel"
+      name="phone"
+      autocomplete="tel"
+      placeholder="9876543210"
+    />
+  </label>
+
+  <br /><br />
+
+  <label>
+    Credit Card Number
+    <input
+      type="text"
+      name="card_number"
+      autocomplete="cc-number"
+      placeholder="1234 5678 9012 3456"
+    />
+  </label>
+
+  <br /><br />
+
+  <label>
+    CVV
+    <input
+      type="text"
+      name="cvv"
+      autocomplete="cc-csc"
+      placeholder="123"
+    />
+  </label>
+
+  <br /><br />
+
+  <button type="submit">Submit</button>
+</form>
+
+<pre id="sanitizer-tests" style="white-space: pre-wrap; margin-top: 2rem; font-family: monospace;"></pre>
+
+<script src="./extensions/src/privacy-classifier.js"></script>
+<script src="./extensions/src/privacy-fusion.js"></script>
+<script src="./extensions/src/privacy-sanitizer.js"></script>
+<script src="./extensions/src/privacy-engine-synthetic-tests.js"></script>
+<script>
+  window.addEventListener('DOMContentLoaded', () => {
+    const output = document.getElementById('sanitizer-tests');
+    const result = window.runPrivacySyntheticSuite();
+    output.textContent = JSON.stringify(result, null, 2);
+  });
+</script>

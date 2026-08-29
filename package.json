@@ -1,0 +1,31 @@
+{
+  "name": "visual-perception-browser-agent",
+  "version": "1.0.0",
+  "description": "Privacy-preserving browser-based vision agent for SIH26171.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "build": "vite build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ankushhKapoor/visual-perception-browser-agent.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/ankushhKapoor/visual-perception-browser-agent/issues"
+  },
+  "homepage": "https://github.com/ankushhKapoor/visual-perception-browser-agent#readme",
+  "devDependencies": {
+    "@crxjs/vite-plugin": "^2.7.1",
+    "vite": "^8.2.2"
+  },
+  "dependencies": {
+    "tesseract.js": "^5.1.1"
+  }
+}
