@@ -143,10 +143,80 @@ function extractPageContext() {
   };
 }
 
-function captureScreenshot() {
+function redactScreenshot(dataUrl, sensitiveElements) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+
+    image.onload = () => {
+      const canvas = document.createElement("canvas");
+      const context = canvas.getContext("2d");
+
+      canvas.width = image.width;
+      canvas.height = image.height;
+
+      context.drawImage(image, 0, 0);
+
+      const scaleX = image.width / window.innerWidth;
+      const scaleY = image.height / window.innerHeight;
+
+      context.fillStyle = "black";
+
+      sensitiveElements.forEach((element) => {
+        const rect = element.rect;
+
+        context.fillRect(
+          Math.round(rect.x * scaleX),
+          Math.round(rect.y * scaleY),
+          Math.round(rect.width * scaleX),
+          Math.round(rect.height * scaleY)
+        );
+      });
+
+      resolve(canvas.toDataURL("image/png"));
+    };
+
+    image.onerror = () => {
+      reject(new Error("Failed to load screenshot for redaction"));
+    };
+
+    image.src = dataUrl;
+  });
+}
+
+function displaySanitizedPreview(sanitizedScreenshot) {
+  const existingPreview = document.getElementById(
+    "visual-perception-sanitized-preview"
+  );
+
+  if (existingPreview) {
+    existingPreview.remove();
+  }
+
+  const preview = document.createElement("img");
+
+  preview.id = "visual-perception-sanitized-preview";
+  preview.src = sanitizedScreenshot;
+  preview.alt = "Sanitized Screenshot Preview";
+
+  preview.style.position = "fixed";
+  preview.style.top = "10px";
+  preview.style.right = "10px";
+  preview.style.width = "400px";
+  preview.style.maxHeight = "80vh";
+  preview.style.border = "3px solid red";
+  preview.style.zIndex = "2147483647";
+  preview.style.background = "white";
+  preview.style.objectFit = "contain";
+
+  document.body.appendChild(preview);
+
+  console.log("Sanitized screenshot preview displayed");
+}
+
+function captureScreenshot(sensitiveElements) {
   chrome.runtime.sendMessage(
     { type: "CAPTURE_SCREENSHOT" },
-    (response) => {
+    async (response) => {
       if (chrome.runtime.lastError) {
         console.error(
           "Could not communicate with background script:",
@@ -163,8 +233,34 @@ function captureScreenshot() {
         return;
       }
 
-      console.log("Screenshot captured successfully");
-      console.log("Screenshot size:", response.screenshot.length);
+      try {
+        console.log("Screenshot captured successfully");
+        console.log("Screenshot size:", response.screenshot.length);
+
+        const sanitizedScreenshot = await redactScreenshot(
+          response.screenshot,
+          sensitiveElements
+        );
+
+        console.log("Screenshot sanitized successfully");
+
+        console.log(
+          "Sensitive regions redacted:",
+          sensitiveElements.length
+        );
+
+        console.log(
+          "Sanitized screenshot size:",
+          sanitizedScreenshot.length
+        );
+
+        displaySanitizedPreview(sanitizedScreenshot);
+      } catch (error) {
+        console.error(
+          "Local screenshot redaction failed:",
+          error.message
+        );
+      }
     }
   );
 }
@@ -174,4 +270,4 @@ const pageContext = extractPageContext();
 console.log("Page Context:");
 console.log(pageContext);
 
-captureScreenshot();
+captureScreenshot(pageContext.sensitiveElements);
