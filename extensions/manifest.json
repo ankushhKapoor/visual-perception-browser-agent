@@ -3,20 +3,17 @@
   "name": "Visual Perception Browser Agent",
   "version": "0.1.0",
   "description": "Privacy-preserving browser vision agent for SIH26171",
-
   "permissions": [
     "activeTab"
   ],
-
   "host_permissions": [
-    "<all_urls>"
+    "<all_urls>",
+    "http://127.0.0.1:8000/*"
   ],
-
   "background": {
     "service_worker": "extensions/src/background.js",
     "type": "module"
   },
-
   "content_scripts": [
     {
       "matches": [
@@ -27,7 +24,6 @@
       ]
     }
   ],
-
   "action": {
     "default_title": "Visual Perception Agent"
   }

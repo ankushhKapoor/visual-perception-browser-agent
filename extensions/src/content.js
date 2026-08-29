@@ -1543,7 +1543,13 @@ function containsRawSensitiveFields(value) {
   });
 }
 
-function collectStringValues(value, results = []) {
+function collectStringValues(value, results = [], options = {}, path = "$") {
+  const excludedPaths = options.excludedPaths || new Set();
+
+  if (excludedPaths.has(path)) {
+    return results;
+  }
+
   if (value === null || value === undefined) {
     return results;
   }
@@ -1556,12 +1562,16 @@ function collectStringValues(value, results = []) {
   }
 
   if (Array.isArray(value)) {
-    value.forEach((item) => collectStringValues(item, results));
+    value.forEach((item, index) => {
+      collectStringValues(item, results, options, `${path}[${index}]`);
+    });
     return results;
   }
 
   if (typeof value === "object") {
-    Object.values(value).forEach((item) => collectStringValues(item, results));
+    Object.entries(value).forEach(([key, nestedValue]) => {
+      collectStringValues(nestedValue, results, options, `${path}.${key}`);
+    });
   }
 
   return results;
@@ -1607,6 +1617,81 @@ function looksLikeSensitiveString(value) {
   ];
 
   return suspiciousMarkers.some((marker) => lower.includes(marker));
+}
+
+function maskDiagnosticValue(value) {
+  if (value.length <= 8) {
+    return "*".repeat(value.length);
+  }
+
+  const visiblePrefix = value.slice(0, 3);
+  const visibleSuffix = value.slice(-3);
+  return `${visiblePrefix}${"*".repeat(Math.min(value.length - 6, 24))}${visibleSuffix}`;
+}
+
+function getSensitiveStringRule(value) {
+  const deterministicDetections = runAllDeterministicDetectors(value);
+  if (deterministicDetections.length > 0) {
+    return deterministicDetections
+      .map((detection) => detection.piiType || detection.type || "deterministic-detector")
+      .join(", ");
+  }
+
+  const lower = value.toLowerCase();
+  const suspiciousMarkers = [
+    "password",
+    "otp",
+    "api key",
+    "secret",
+    "authorization",
+    "bearer",
+    "session token",
+    "ssn",
+    "aadhaar",
+    "pan number",
+    "email is",
+    "phone is",
+    "dob",
+    "date of birth",
+    "address",
+    "full name"
+  ];
+
+  return suspiciousMarkers.find((marker) => lower.includes(marker)) || "unknown";
+}
+
+function findSuspiciousStringDiagnostics(value, path = "$", results = [], options = {}) {
+  const excludedPaths = options.excludedPaths || new Set();
+
+  if (excludedPaths.has(path)) {
+    return results;
+  }
+
+  if (typeof value === "string") {
+    if (looksLikeSensitiveString(value)) {
+      results.push({
+        path,
+        value: maskDiagnosticValue(value),
+        rule: getSensitiveStringRule(value)
+      });
+    }
+    return results;
+  }
+
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => {
+      findSuspiciousStringDiagnostics(item, `${path}[${index}]`, results, options);
+    });
+    return results;
+  }
+
+  if (value && typeof value === "object") {
+    Object.entries(value).forEach(([key, nestedValue]) => {
+      findSuspiciousStringDiagnostics(nestedValue, `${path}.${key}`, results, options);
+    });
+  }
+
+  return results;
 }
 
 function createSafeOutputContract(payload) {
@@ -1670,9 +1755,22 @@ function finalPrivacyGate(payload) {
   }
 
   const safePayload = createSafeOutputContract(payload);
-  const rawSensitiveFieldsDetected = containsRawSensitiveFields(payload);
-  const allStringValues = collectStringValues(payload);
+  const rawSensitiveFieldsDetected = containsRawSensitiveFields(safePayload);
+  const stringScanOptions = {
+    excludedPaths: new Set([
+      "$.visualContext.sanitizedScreenshot"
+    ])
+  };
+  const allStringValues = collectStringValues(payload, [], stringScanOptions);
   const suspiciousStrings = allStringValues.filter((value) => looksLikeSensitiveString(value));
+  const suspiciousStringDiagnostics = findSuspiciousStringDiagnostics(payload, "$", [], stringScanOptions);
+
+  if (suspiciousStringDiagnostics.length > 0) {
+    console.warn(
+      "Final privacy gate suspicious string diagnostics (local only):",
+      suspiciousStringDiagnostics
+    );
+  }
 
   const hasMissingSanitizedFlags =
     payload.privacy?.rawScreenshotIncluded === true ||
@@ -2007,6 +2105,247 @@ function redactScreenshot(
   );
 }
 
+function sanitizeText(text) {
+  if (typeof text !== "string" || !text) {
+    return text || "";
+  }
+
+  const detections = [];
+  const patterns = getPIIPatterns();
+  const typeMap = {
+    email: "EMAIL",
+    phone: "PHONE",
+    aadhaar: "GOVERNMENT_ID",
+    pan: "GOVERNMENT_ID",
+    card: "CARD"
+  };
+
+  Object.entries(patterns).forEach(([patternType, pattern]) => {
+    pattern.lastIndex = 0;
+    let match;
+
+    while ((match = pattern.exec(text)) !== null) {
+      detections.push({
+        piiType: typeMap[patternType],
+        value: match[0],
+        startIndex: match.index,
+        endIndex: match.index + match[0].length,
+        severity: ["CARD"].includes(typeMap[patternType]) ? "CRITICAL" : "HIGH",
+        confidence: 0.95
+      });
+
+      if (!pattern.global) {
+        break;
+      }
+    }
+  });
+
+  if (/(password|otp|cvv|secret|token|authorization|bearer)\s*(?:=|:|is)?/i.test(text)) {
+    detections.push({
+      piiType: "SECRET",
+      value: text,
+      startIndex: 0,
+      endIndex: text.length,
+      severity: "CRITICAL",
+      confidence: 0.99
+    });
+  }
+
+  return sanitizeTextWithPlaceholders(text, detections).sanitized;
+}
+
+function sendSanitizedScreenshotForAnalysis(sanitizedScreenshot) {
+  return new Promise((resolve, reject) => {
+    const chromeApi = typeof globalThis !== "undefined" ? globalThis.chrome : undefined;
+
+    if (!chromeApi?.runtime?.sendMessage) {
+      reject(new Error("Chrome runtime is unavailable for visual analysis"));
+      return;
+    }
+
+    chromeApi.runtime.sendMessage(
+      {
+        type: "SEND_SANITIZED_FOR_ANALYSIS",
+        screenshot: sanitizedScreenshot,
+        sanitized: true
+      },
+      (response) => {
+        if (chromeApi.runtime.lastError) {
+          reject(new Error(chromeApi.runtime.lastError.message));
+          return;
+        }
+
+        if (!response?.success) {
+          reject(new Error(response?.error || "Sanitized screenshot analysis failed"));
+          return;
+        }
+
+        resolve(response.analysis || {});
+      }
+    );
+  });
+}
+
+function getAnalysisRect(item) {
+  const box = item?.bounding_box || item?.boundingBox || item?.box || item?.rect || item;
+  if (!box) {
+    return null;
+  }
+
+  if ([box.x, box.y, box.width, box.height].every((value) => typeof value === "number")) {
+    return { x: box.x, y: box.y, width: box.width, height: box.height };
+  }
+
+  if ([box.x1, box.y1, box.x2, box.y2].every((value) => typeof value === "number")) {
+    return {
+      x: box.x1,
+      y: box.y1,
+      width: box.x2 - box.x1,
+      height: box.y2 - box.y1
+    };
+  }
+
+  return null;
+}
+
+function mapVisualItemsToDomElements(domElements, items, imageInfo, viewport, minimumOverlap = 0.3) {
+  const imageWidth = Number(imageInfo?.width);
+  const imageHeight = Number(imageInfo?.height);
+  const scaleX = imageWidth && viewport?.width ? viewport.width / imageWidth : 1;
+  const scaleY = imageHeight && viewport?.height ? viewport.height / imageHeight : 1;
+
+  return (Array.isArray(items) ? items : []).map((item, index) => {
+    const rect = getAnalysisRect(item);
+    const viewportRect = rect ? {
+      x: rect.x * scaleX,
+      y: rect.y * scaleY,
+      width: rect.width * scaleX,
+      height: rect.height * scaleY
+    } : null;
+    const matchedElements = viewportRect ? domElements.map((element) => {
+      const left = Math.max(element.rect.x, viewportRect.x);
+      const top = Math.max(element.rect.y, viewportRect.y);
+      const right = Math.min(element.rect.x + element.rect.width, viewportRect.x + viewportRect.width);
+      const bottom = Math.min(element.rect.y + element.rect.height, viewportRect.y + viewportRect.height);
+      const area = Math.max(0, right - left) * Math.max(0, bottom - top);
+      const visualArea = viewportRect.width * viewportRect.height;
+      return { element, score: visualArea > 0 ? area / visualArea : 0 };
+    }).filter(({ score }) => score >= minimumOverlap).sort((a, b) => b.score - a.score).map(({ element, score }) => ({
+      elementId: element.elementId,
+      tag: element.tag,
+      category: element.category,
+      score: Number(score.toFixed(3))
+    })) : [];
+
+    return {
+      ...item,
+      visualItemId: item.visualItemId || `visual_item_${index + 1}`,
+      mapping: { mapped: matchedElements.length > 0, viewportRect, matchedElements }
+    };
+  });
+}
+
+function createBrowserPerceptionState(finalPayload, analysis) {
+  const imageInfo = analysis?.image || {};
+  const domElements = finalPayload.domContext.elements || [];
+  const visualText = mapVisualItemsToDomElements(domElements, analysis?.texts, imageInfo, finalPayload.page.viewport);
+  const visualRegions = mapVisualItemsToDomElements(domElements, analysis?.regions, imageInfo, finalPayload.page.viewport, 0.2);
+  const objects = mapVisualItemsToDomElements(domElements, analysis?.objects, imageInfo, finalPayload.page.viewport, 0.2);
+  const compactText = visualText.map((item) => ({
+    visualItemId: item.visualItemId,
+    text: sanitizeText(item.text || item.value || item.content || ""),
+    rect: item.mapping.viewportRect || getAnalysisRect(item),
+    mappedElementIds: item.mapping.matchedElements.map((match) => match.elementId)
+  }));
+  const compactRegions = visualRegions.map((item) => ({
+    visualItemId: item.visualItemId,
+    type: item.type || item.class || item.category || item.label || "visual_region",
+    rect: item.mapping.viewportRect || getAnalysisRect(item),
+    mappedElementIds: item.mapping.matchedElements.map((match) => match.elementId)
+  }));
+  const compactObjects = objects.map((item) => ({
+    visualItemId: item.visualItemId,
+    class: item.class || item.label || item.category || "object",
+    confidence: item.confidence ?? item.score ?? null,
+    rect: item.mapping.viewportRect || getAnalysisRect(item),
+    mappedElementIds: item.mapping.matchedElements.map((match) => match.elementId)
+  }));
+
+  return stripRawSensitiveFields({
+    page: {
+      url: sanitizeText(finalPayload.page.url),
+      title: sanitizeText(finalPayload.page.title),
+      viewport: finalPayload.page.viewport
+    },
+    interactiveElements: (domElements.filter((element) => ["button", "input", "textarea", "select", "link", "contenteditable"].includes(element.category))).map((element) => ({
+      elementId: element.elementId,
+      tag: element.tag,
+      category: element.category,
+      type: element.type,
+      text: sanitizeText(element.text),
+      placeholder: sanitizeText(element.placeholder) || null,
+      label: sanitizeText(element.label) || null,
+      rect: element.rect,
+      visualContext: { hasVisualMatch: false }
+    })),
+    forms: finalPayload.domContext.forms.map((form) => ({
+      ...form,
+      action: sanitizeText(form.action),
+      controls: form.controls.map((control) => ({
+        ...control,
+        text: sanitizeText(control.text),
+        placeholder: sanitizeText(control.placeholder),
+        label: sanitizeText(control.label),
+        accessibility: {
+          ...control.accessibility,
+          accessibleName: sanitizeText(control.accessibility?.accessibleName),
+          ariaLabel: sanitizeText(control.accessibility?.ariaLabel)
+        }
+      }))
+    })),
+    visualText: compactText,
+    visualRegions: compactRegions,
+    objects: compactObjects,
+    privacy: {
+      piiDetected: finalPayload.privacy.piiDetected,
+      redactedRegionCount: finalPayload.privacy.redactedRegionCount,
+      rawScreenshotIncluded: false
+    },
+    summary: {
+      totalElements: domElements.length,
+      interactiveElements: finalPayload.domContext.interactiveElements.length,
+      visualTextRegions: compactText.length,
+      visualRegions: compactRegions.length,
+      objects: compactObjects.length,
+      forms: finalPayload.domContext.forms.length
+    },
+    timestamp: finalPayload.timestamp
+  });
+}
+
+function sendBrowserPerceptionState(browserPerceptionState) {
+  return new Promise((resolve, reject) => {
+    const chromeApi = typeof globalThis !== "undefined" ? globalThis.chrome : undefined;
+    if (!chromeApi?.runtime?.sendMessage) {
+      reject(new Error("Chrome runtime is unavailable for browser perception"));
+      return;
+    }
+
+    chromeApi.runtime.sendMessage(
+      { type: "SEND_BROWSER_PERCEPTION", perceptionState: browserPerceptionState },
+      (response) => {
+        if (chromeApi.runtime.lastError) {
+          reject(new Error(chromeApi.runtime.lastError.message));
+        } else if (!response?.success) {
+          reject(new Error(response?.error || "Failed to send browser perception state"));
+        } else {
+          resolve(response.serverResponse);
+        }
+      }
+    );
+  });
+}
+
 function captureScreenshot(
   pageContext,
   options = {}
@@ -2182,10 +2521,37 @@ function captureScreenshot(
               }
             );
 
+            let analysis = null;
+            let browserPerceptionState = null;
+
+            try {
+              analysis =
+                await sendSanitizedScreenshotForAnalysis(
+                  sanitizedScreenshot
+                );
+
+              browserPerceptionState =
+                createBrowserPerceptionState(
+                  finalPayload,
+                  analysis
+                );
+
+              await sendBrowserPerceptionState(
+                browserPerceptionState
+              );
+            } catch (error) {
+              console.warn(
+                "Optional visual perception analysis failed:",
+                error.message
+              );
+            }
+
             resolve({
               success: true,
               screenshot: sanitizedScreenshot,
               payload: finalPayload,
+              analysis,
+              browserPerceptionState,
               gate: gateDecision
             });
           } catch (error) {
@@ -2198,6 +2564,45 @@ function captureScreenshot(
           }
         }
       );
+    }
+  );
+}
+
+if (
+  typeof chrome !== "undefined" &&
+  chrome.runtime &&
+  typeof chrome.runtime.onMessage?.addListener === "function"
+) {
+  chrome.runtime.onMessage.addListener(
+    (message, sender, sendResponse) => {
+      if (message?.type !== "RUN_PRIVACY_CAPTURE_AND_ANALYZE") {
+        return false;
+      }
+
+      try {
+        const pageContext = extractPageContext();
+
+        captureScreenshot(
+          pageContext,
+          { userInitiated: true }
+        )
+          .then((result) => {
+            sendResponse(result);
+          })
+          .catch((error) => {
+            sendResponse({
+              success: false,
+              error: error.message
+            });
+          });
+      } catch (error) {
+        sendResponse({
+          success: false,
+          error: error.message
+        });
+      }
+
+      return true;
     }
   );
 }
