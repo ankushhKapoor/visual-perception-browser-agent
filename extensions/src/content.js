@@ -1,4 +1,7 @@
-console.log("Visual Perception Browser Agent: content script loaded");
+console.log(
+  "Visual Perception Browser Agent: content script loaded",
+  chrome.runtime.id
+);
 
 function getVisibleText() {
   return document.body.innerText
@@ -68,9 +71,7 @@ function getSensitiveElements() {
     "pan"
   ];
 
-  return Array.from(
-    document.querySelectorAll("input, textarea")
-  )
+  return Array.from(document.querySelectorAll("input, textarea"))
     .filter((element) => {
       const style = window.getComputedStyle(element);
       const rect = element.getBoundingClientRect();
@@ -142,7 +143,35 @@ function extractPageContext() {
   };
 }
 
+function captureScreenshot() {
+  chrome.runtime.sendMessage(
+    { type: "CAPTURE_SCREENSHOT" },
+    (response) => {
+      if (chrome.runtime.lastError) {
+        console.error(
+          "Could not communicate with background script:",
+          chrome.runtime.lastError.message
+        );
+        return;
+      }
+
+      if (!response?.success) {
+        console.error(
+          "Screenshot capture failed:",
+          response?.error
+        );
+        return;
+      }
+
+      console.log("Screenshot captured successfully");
+      console.log("Screenshot size:", response.screenshot.length);
+    }
+  );
+}
+
 const pageContext = extractPageContext();
 
 console.log("Page Context:");
 console.log(pageContext);
+
+captureScreenshot();
