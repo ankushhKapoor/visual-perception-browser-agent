@@ -1,15 +1,3 @@
-console.log(
-  "Visual Perception Browser Agent: content script loaded",
-  chrome.runtime.id
-);
-
-let elementCounter = 0;
-
-function generateElementId() {
-  elementCounter += 1;
-  return `element_${elementCounter}`;
-}
-
 function isElementVisible(element) {
   const style = window.getComputedStyle(element);
   const rect = element.getBoundingClientRect();
@@ -34,650 +22,275 @@ function getElementRect(element) {
   };
 }
 
-function getElementText(element) {
-  return (
-    element.innerText ||
-    element.value ||
-    element.placeholder ||
-    element.getAttribute("aria-label") ||
-    ""
-  )
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 500);
-}
+function getCategory(element) {
+  const tag = element.tagName.toLowerCase();
 
-function getVisibleText() {
-  return document.body.innerText
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 5000);
-}
+  if (tag === "button") return "button";
+  if (tag === "input") return "input";
+  if (tag === "textarea") return "textarea";
+  if (tag === "select") return "select";
+  if (tag === "a") return "link";
+  if (element.isContentEditable) return "contenteditable";
+  if (/^h[1-6]$/.test(tag)) return "heading";
 
-function getLabelTextForElement(element) {
-  const labels = [];
-
-  if (element.labels) {
-    Array.from(element.labels).forEach((label) => {
-      const text = getElementText(label);
-
-      if (text) {
-        labels.push(text);
-      }
-    });
-  }
-
-  const ariaLabelledBy =
-    element.getAttribute("aria-labelledby");
-
-  if (ariaLabelledBy) {
-    ariaLabelledBy.split(/\s+/).forEach((id) => {
-      const referencedElement =
-        document.getElementById(id);
-
-      if (referencedElement) {
-        const text =
-          getElementText(referencedElement);
-
-        if (text) {
-          labels.push(text);
-        }
-      }
-    });
-  }
-
-  return [...new Set(labels)]
-    .join(" ")
-    .slice(0, 500) || null;
-}
-
-function getImplicitRole(element) {
-  const tag =
-    element.tagName.toLowerCase();
-
-  if (tag === "button") {
-    return "button";
-  }
-
-  if (
-    tag === "a" &&
-    element.hasAttribute("href")
-  ) {
-    return "link";
-  }
-
-  if (tag === "textarea") {
-    return "textbox";
-  }
-
-  if (tag === "select") {
-    return "combobox";
-  }
-
-  if (tag === "img") {
-    return "img";
-  }
-
-  if (/^h[1-6]$/.test(tag)) {
-    return "heading";
-  }
-
-  if (tag === "input") {
-    const type =
-      (element.type || "text").toLowerCase();
-
-    if (
-      [
-        "text",
-        "email",
-        "password",
-        "search",
-        "tel",
-        "url"
-      ].includes(type)
-    ) {
-      return "textbox";
-    }
-
-    if (type === "checkbox") {
-      return "checkbox";
-    }
-
-    if (type === "radio") {
-      return "radio";
-    }
-
-    if (
-      [
-        "button",
-        "submit",
-        "reset",
-        "image"
-      ].includes(type)
-    ) {
-      return "button";
-    }
-
-    if (type === "range") {
-      return "slider";
-    }
-
-    if (type === "number") {
-      return "spinbutton";
-    }
-  }
-
-  return null;
-}
-
-function getAccessibleName(element) {
-  const ariaLabel =
-    element.getAttribute("aria-label");
-
-  if (
-    ariaLabel &&
-    ariaLabel.trim()
-  ) {
-    return ariaLabel
-      .trim()
-      .slice(0, 500);
-  }
-
-  const ariaLabelledBy =
-    element.getAttribute("aria-labelledby");
-
-  if (ariaLabelledBy) {
-    const text = ariaLabelledBy
-      .split(/\s+/)
-      .map((id) => {
-        const referencedElement =
-          document.getElementById(id);
-
-        return referencedElement
-          ? getElementText(referencedElement)
-          : "";
-      })
-      .filter(Boolean)
-      .join(" ")
-      .trim();
-
-    if (text) {
-      return text.slice(0, 500);
-    }
-  }
-
-  if (
-    element.labels &&
-    element.labels.length > 0
-  ) {
-    const labelText =
-      Array.from(element.labels)
-        .map((label) =>
-          getElementText(label)
-        )
-        .filter(Boolean)
-        .join(" ")
-        .trim();
-
-    if (labelText) {
-      return labelText.slice(0, 500);
-    }
-  }
-
-  if (
-    element.alt &&
-    element.alt.trim()
-  ) {
-    return element.alt
-      .trim()
-      .slice(0, 500);
-  }
-
-  const title =
-    element.getAttribute("title");
-
-  if (
-    title &&
-    title.trim()
-  ) {
-    return title
-      .trim()
-      .slice(0, 500);
-  }
-
-  const text =
-    getElementText(element);
-
-  if (text) {
-    return text;
-  }
-
-  return null;
-}
-
-function getAriaStates(element) {
-  const states = {};
-
-  const attributes = [
-    "aria-expanded",
-    "aria-checked",
-    "aria-selected",
-    "aria-pressed",
-    "aria-current",
-    "aria-hidden",
-    "aria-required",
-    "aria-invalid",
-    "aria-readonly"
-  ];
-
-  attributes.forEach((attribute) => {
-    const value =
-      element.getAttribute(attribute);
-
-    if (value !== null) {
-      states[attribute] = value;
-    }
-  });
-
-  return states;
+  return tag;
 }
 
 function getAccessibilityInfo(element) {
-  const explicitRole =
-    element.getAttribute("role");
-
-  const implicitRole =
-    getImplicitRole(element);
-
   return {
-    explicitRole:
-      explicitRole || null,
-
-    implicitRole,
-
-    role:
-      explicitRole ||
-      implicitRole ||
-      null,
-
-    ariaLabel:
-      element.getAttribute(
-        "aria-label"
-      ) || null,
-
-    ariaLabelledBy:
-      element.getAttribute(
-        "aria-labelledby"
-      ) || null,
-
+    role: element.getAttribute("role") || null,
+    ariaLabel: element.getAttribute("aria-label") || null,
     accessibleName:
-      getAccessibleName(element),
-
-    enabled:
-      !element.disabled &&
-      element.getAttribute(
-        "aria-disabled"
-      ) !== "true",
-
-    disabled:
-      Boolean(element.disabled) ||
-      element.getAttribute(
-        "aria-disabled"
-      ) === "true",
-
-    ariaStates:
-      getAriaStates(element)
+      element.getAttribute("aria-label") ||
+      element.getAttribute("title") ||
+      element.innerText ||
+      element.value ||
+      null,
+    disabled: Boolean(element.disabled)
   };
 }
 
-function assignFormIds() {
-  Array.from(
-    document.querySelectorAll("form")
-  ).forEach((form, index) => {
-    if (
-      !form.id &&
-      !form.dataset.agentFormId
-    ) {
-      form.dataset.agentFormId =
-        `form_${index + 1}`;
+function getLabelForElement(element) {
+  if (element.id) {
+    const label = document.querySelector(
+      `label[for="${CSS.escape(element.id)}"]`
+    );
+
+    if (label) {
+      return (
+        label.innerText ||
+        label.textContent ||
+        ""
+      ).trim();
     }
-  });
-}
-
-function getFormId(element) {
-  const form =
-    element.closest("form");
-
-  if (!form) {
-    return null;
   }
 
-  return (
-    form.id ||
-    form.dataset.agentFormId ||
-    null
-  );
+  const parentLabel = element.closest("label");
+
+  if (parentLabel) {
+    return (
+      parentLabel.innerText ||
+      parentLabel.textContent ||
+      ""
+    ).trim();
+  }
+
+  return "";
 }
 
-function getRelevantElements() {
+function getDomElements() {
   const selectors = [
     "button",
     "input",
     "textarea",
     "select",
     "a[href]",
+    "[contenteditable='true']",
     "h1",
     "h2",
     "h3",
     "h4",
     "h5",
     "h6",
-    "form",
-    "label",
-    "img",
-    "[contenteditable='true']",
     "[role='button']",
     "[role='link']",
     "[role='textbox']",
     "[role='checkbox']",
     "[role='radio']",
-    "[role='combobox']",
     "[role='tab']",
     "[role='menuitem']"
   ];
 
-  return Array.from(
+  const elements = Array.from(
     document.querySelectorAll(
       selectors.join(",")
     )
-  ).filter(isElementVisible);
+  );
+
+  return elements
+    .filter(isElementVisible)
+    .map((element, index) => ({
+      elementId:
+        `element_${index + 1}`,
+      tag:
+        element.tagName.toLowerCase(),
+      category:
+        getCategory(element),
+      type:
+        element.getAttribute("type") ||
+        null,
+      id:
+        element.id || null,
+      name:
+        element.getAttribute("name") ||
+        null,
+      text: (
+        element.innerText ||
+        element.value ||
+        element.textContent ||
+        ""
+      )
+        .trim()
+        .slice(0, 500),
+      placeholder:
+        element.getAttribute(
+          "placeholder"
+        ) || null,
+      label:
+        getLabelForElement(element),
+      rect:
+        getElementRect(element),
+      accessibility:
+        getAccessibilityInfo(element)
+    }));
 }
 
-function getElementCategory(element) {
-  const tag =
-    element.tagName.toLowerCase();
-
-  const role =
-    element.getAttribute("role");
-
-  if (
-    tag === "button" ||
-    role === "button"
-  ) {
-    return "button";
-  }
-
-  if (tag === "input") {
-    return "input";
-  }
-
-  if (tag === "textarea") {
-    return "textarea";
-  }
-
-  if (tag === "select") {
-    return "select";
-  }
-
-  if (
-    tag === "a" ||
-    role === "link"
-  ) {
-    return "link";
-  }
-
-  if (/^h[1-6]$/.test(tag)) {
-    return "heading";
-  }
-
-  if (tag === "form") {
-    return "form";
-  }
-
-  if (tag === "label") {
-    return "label";
-  }
-
-  if (tag === "img") {
-    return "image";
-  }
-
-  if (element.isContentEditable) {
-    return "contenteditable";
-  }
-
-  return "other";
-}
-
-function getDomElements() {
-  assignFormIds();
-
-  elementCounter = 0;
-
-  return getRelevantElements()
-    .slice(0, 300)
-    .map((element) => {
-      const tag =
-        element.tagName.toLowerCase();
-
-      return {
-        elementId:
-          generateElementId(),
-
-        category:
-          getElementCategory(element),
-
-        tag,
-
-        text:
-          getElementText(element),
-
-        type:
-          element.type || null,
-
-        name:
-          element.name || null,
-
-        id:
-          element.id || null,
-
-        placeholder:
-          element.placeholder || null,
-
-        href:
-          tag === "a"
-            ? element.href || null
-            : null,
-
-        src:
-          tag === "img"
-            ? (
-                element.currentSrc ||
-                element.src ||
-                null
-              )
-            : null,
-
-        alt:
-          tag === "img"
-            ? element.alt || null
-            : null,
-
-        label:
-          getLabelTextForElement(
-            element
-          ),
-
-        formId:
-          getFormId(element),
-
-        rect:
-          getElementRect(element),
-
-        visible:
-          true,
-
-        accessibility:
-          getAccessibilityInfo(
-            element
-          )
-      };
-    });
+function getVisibleText() {
+  return (
+    document.body?.innerText ||
+    ""
+  )
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 10000);
 }
 
 function getForms() {
-  assignFormIds();
-
   return Array.from(
     document.querySelectorAll("form")
   )
     .filter(isElementVisible)
-    .map((form) => {
-      const formId =
-        form.id ||
-        form.dataset.agentFormId;
-
-      const controls =
-        Array.from(
-          form.querySelectorAll(
-            "input, textarea, select, button"
-          )
+    .map((form, formIndex) => {
+      const controls = Array.from(
+        form.querySelectorAll(
+          "input, textarea, select, button"
         )
-          .filter(isElementVisible)
-          .map((element) => ({
+      )
+        .filter(isElementVisible)
+        .map(
+          (control, controlIndex) => ({
+            controlId:
+              `form_${formIndex + 1}_control_${controlIndex + 1}`,
             tag:
-              element.tagName.toLowerCase(),
-
+              control.tagName.toLowerCase(),
+            category:
+              getCategory(control),
             type:
-              element.type || null,
-
-            name:
-              element.name || null,
-
+              control.getAttribute(
+                "type"
+              ) || null,
             id:
-              element.id || null,
-
-            text:
-              getElementText(element),
-
+              control.id || null,
+            name:
+              control.getAttribute(
+                "name"
+              ) || null,
+            text: (
+              control.innerText ||
+              control.value ||
+              control.textContent ||
+              ""
+            )
+              .trim()
+              .slice(0, 500),
+            placeholder:
+              control.getAttribute(
+                "placeholder"
+              ) || null,
+            label:
+              getLabelForElement(control),
+            rect:
+              getElementRect(control),
             accessibility:
-              getAccessibilityInfo(
-                element
-              )
-          }));
+              getAccessibilityInfo(control)
+          })
+        );
 
       return {
-        formId,
-
-        action:
-          form.action || null,
-
-        method:
-          form.method || "get",
-
+        formId:
+          `form_${formIndex + 1}`,
+        id:
+          form.id || null,
+        name:
+          form.getAttribute(
+            "name"
+          ) || null,
         rect:
           getElementRect(form),
-
         controls
       };
     });
 }
 
-function isSensitiveInput(element) {
+function getSensitiveInputElements() {
   const sensitiveKeywords = [
     "password",
-    "email",
-    "phone",
-    "tel",
-    "mobile",
+    "passcode",
+    "otp",
+    "verification",
+    "pin",
+    "cvv",
+    "cvc",
     "card",
     "credit",
     "debit",
-    "cvv",
-    "cvc",
-    "ssn",
+    "bank",
+    "account",
+    "email",
+    "phone",
+    "mobile",
+    "tel",
     "aadhaar",
-    "pan"
+    "aadhar",
+    "pan",
+    "passport",
+    "token",
+    "secret",
+    "api"
   ];
 
-  const metadata = [
-    element.type,
-    element.name,
-    element.id,
-    element.autocomplete,
-    element.placeholder,
-    element.getAttribute(
-      "aria-label"
-    )
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-
-  return (
-    element.type === "password" ||
-    sensitiveKeywords.some(
-      (keyword) =>
-        metadata.includes(keyword)
-    )
-  );
-}
-
-function getSensitiveInputElements() {
   return Array.from(
     document.querySelectorAll(
       "input, textarea"
     )
   )
+    .filter(isElementVisible)
     .filter((element) => {
-      if (
-        !isElementVisible(element)
-      ) {
-        return false;
-      }
+      const metadata = [
+        element.type,
+        element.name,
+        element.id,
+        element.autocomplete,
+        element.placeholder,
+        element.getAttribute(
+          "aria-label"
+        ),
+        getLabelForElement(element)
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
 
-      return isSensitiveInput(
-        element
+      return (
+        element.type === "password" ||
+        sensitiveKeywords.some(
+          (keyword) =>
+            metadata.includes(keyword)
+        )
       );
     })
     .map((element) => ({
       source:
         "input",
-
       tag:
         element.tagName.toLowerCase(),
-
       type:
         element.type || null,
-
-      name:
-        element.name || null,
-
-      id:
-        element.id || null,
-
+      text:
+        "[REDACTED]",
       rect:
         getElementRect(element)
     }));
-}
-
-function getPIIPatterns() {
-  return {
-    email:
-      /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi,
-
-    phone:
-      /\b(?:\+91[\s-]?)?[6-9]\d{9}\b/g,
-
-    aadhaar:
-      /\b\d{4}[\s-]?\d{4}[\s-]?\d{4}\b/g,
-
-    pan:
-      /\b[A-Z]{5}[0-9]{4}[A-Z]\b/gi,
-
-    card:
-      /\b(?:\d{4}[\s-]?){3}\d{4}\b/g
-  };
 }
 
 function containsPII(text) {
@@ -685,33 +298,40 @@ function containsPII(text) {
     return false;
   }
 
-  const patterns =
-    getPIIPatterns();
+  const value = String(text);
 
-  return Object.values(
-    patterns
-  ).some((pattern) => {
-    pattern.lastIndex = 0;
+  const patterns = [
+    /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i,
+    /\b(?:\+91[\s-]?)?[6-9]\d{9}\b/,
+    /\b\d{4}[\s-]?\d{4}[\s-]?\d{4}\b/,
+    /\b[A-Z]{5}[0-9]{4}[A-Z]\b/i,
+    /\b(?:\d{4}[\s-]?){3}\d{4}\b/
+  ];
 
-    return pattern.test(text);
-  });
+  return patterns.some(
+    (pattern) =>
+      pattern.test(value)
+  );
 }
 
 function sanitizeText(text) {
   if (!text) {
-    return text;
+    return "";
   }
 
   let sanitizedText =
     String(text);
 
-  const patterns =
-    getPIIPatterns();
+  const patterns = [
+    /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi,
+    /\b(?:\+91[\s-]?)?[6-9]\d{9}\b/g,
+    /\b\d{4}[\s-]?\d{4}[\s-]?\d{4}\b/g,
+    /\b[A-Z]{5}[0-9]{4}[A-Z]\b/gi,
+    /\b(?:\d{4}[\s-]?){3}\d{4}\b/g
+  ];
 
-  Object.values(patterns).forEach(
+  patterns.forEach(
     (pattern) => {
-      pattern.lastIndex = 0;
-
       sanitizedText =
         sanitizedText.replace(
           pattern,
@@ -735,7 +355,9 @@ function getSensitiveTextElements() {
   ]);
 
   return Array.from(
-    document.querySelectorAll("body *")
+    document.querySelectorAll(
+      "body *"
+    )
   )
     .filter((element) => {
       if (
@@ -774,10 +396,8 @@ function getSensitiveTextElements() {
     .map((element) => ({
       source:
         "text",
-
       tag:
         element.tagName.toLowerCase(),
-
       text:
         Array.from(
           element.childNodes
@@ -793,7 +413,6 @@ function getSensitiveTextElements() {
           .filter(Boolean)
           .join(" ")
           .slice(0, 200),
-
       rect:
         getElementRect(element)
     }));
@@ -813,23 +432,17 @@ function extractPageContext() {
   return {
     url:
       window.location.href,
-
     title:
       document.title,
-
     viewport: {
       width:
         window.innerWidth,
-
       height:
         window.innerHeight
     },
-
     visibleText:
       getVisibleText(),
-
     domElements,
-
     interactiveElements:
       domElements.filter(
         (element) =>
@@ -844,13 +457,10 @@ function extractPageContext() {
             element.category
           )
       ),
-
     forms:
       getForms(),
-
     sensitiveElements:
       getSensitiveElements(),
-
     timestamp:
       new Date().toISOString()
   };
@@ -898,7 +508,9 @@ function sanitizeDomElement(
     isSensitive ||
     containsPII(element.text)
       ? "[REDACTED]"
-      : sanitizeText(element.text);
+      : sanitizeText(
+          element.text
+        );
 
   sanitizedElement.placeholder =
     containsPII(
@@ -955,24 +567,24 @@ function sanitizeForms(
             .join(" ")
             .toLowerCase();
 
-          const isSensitive =
-            [
-              "password",
-              "email",
-              "phone",
-              "tel",
-              "mobile",
-              "card",
-              "credit",
-              "debit",
-              "cvv",
-              "cvc",
-              "ssn",
-              "aadhaar",
-              "pan"
-            ].some((keyword) =>
+          const isSensitive = [
+            "password",
+            "email",
+            "phone",
+            "tel",
+            "mobile",
+            "card",
+            "credit",
+            "debit",
+            "cvv",
+            "cvc",
+            "ssn",
+            "aadhaar",
+            "pan"
+          ].some(
+            (keyword) =>
               metadata.includes(keyword)
-            );
+          );
 
           return {
             ...control,
@@ -1031,10 +643,8 @@ function createSanitizedPayload(
     page: {
       url:
         pageContext.url,
-
       title:
         pageContext.title,
-
       viewport:
         pageContext.viewport
     },
@@ -1077,14 +687,14 @@ function createSanitizedPayload(
           .length > 0,
 
       redactedRegions:
-        pageContext.sensitiveElements
-          .map((element) => ({
+        pageContext.sensitiveElements.map(
+          (element) => ({
             source:
               element.source,
-
             rect:
               element.rect
-          })),
+          })
+        ),
 
       redactedRegionCount:
         pageContext.sensitiveElements
@@ -1122,7 +732,6 @@ function redactScreenshot(
               "Could not create canvas context"
             )
           );
-
           return;
         }
 
@@ -1191,6 +800,1034 @@ function redactScreenshot(
   );
 }
 
+function sendSanitizedScreenshotForAnalysis(
+  sanitizedScreenshot
+) {
+  return new Promise(
+    (resolve, reject) => {
+      chrome.runtime.sendMessage(
+        {
+          type:
+            "SEND_SANITIZED_FOR_ANALYSIS",
+
+          screenshot:
+            sanitizedScreenshot
+        },
+        (analysisResponse) => {
+          if (
+            chrome.runtime.lastError
+          ) {
+            reject(
+              new Error(
+                chrome.runtime.lastError
+                  .message
+              )
+            );
+
+            return;
+          }
+
+          if (
+            !analysisResponse?.success
+          ) {
+            reject(
+              new Error(
+                analysisResponse?.error ||
+                "Sanitized screenshot analysis failed"
+              )
+            );
+
+            return;
+          }
+
+          resolve(
+            analysisResponse.analysis
+          );
+        }
+      );
+    }
+  );
+}
+
+function getAnalysisRect(item) {
+  if (!item) {
+    return null;
+  }
+
+  const box =
+    item.bounding_box ||
+    item.boundingBox ||
+    item.box ||
+    item.rect ||
+    item;
+
+  if (
+    typeof box.x === "number" &&
+    typeof box.y === "number"
+  ) {
+    const width =
+      box.width ??
+      (
+        typeof box.x2 ===
+        "number"
+          ? box.x2 - box.x
+          : null
+      );
+
+    const height =
+      box.height ??
+      (
+        typeof box.y2 ===
+        "number"
+          ? box.y2 - box.y
+          : null
+      );
+
+    if (
+      typeof width === "number" &&
+      typeof height === "number"
+    ) {
+      return {
+        x:
+          box.x,
+        y:
+          box.y,
+        width,
+        height
+      };
+    }
+  }
+
+  if (
+    typeof box.x1 === "number" &&
+    typeof box.y1 === "number" &&
+    typeof box.x2 === "number" &&
+    typeof box.y2 === "number"
+  ) {
+    return {
+      x:
+        box.x1,
+      y:
+        box.y1,
+      width:
+        box.x2 - box.x1,
+      height:
+        box.y2 - box.y1
+    };
+  }
+
+  return null;
+}
+
+function scaleAnalysisRect(
+  rect,
+  imageInfo,
+  viewport
+) {
+  if (!rect) {
+    return null;
+  }
+
+  const imageWidth =
+    imageInfo?.width;
+
+  const imageHeight =
+    imageInfo?.height;
+
+  if (
+    !imageWidth ||
+    !imageHeight ||
+    !viewport?.width ||
+    !viewport?.height
+  ) {
+    return rect;
+  }
+
+  return {
+    x:
+      rect.x *
+      (
+        viewport.width /
+        imageWidth
+      ),
+
+    y:
+      rect.y *
+      (
+        viewport.height /
+        imageHeight
+      ),
+
+    width:
+      rect.width *
+      (
+        viewport.width /
+        imageWidth
+      ),
+
+    height:
+      rect.height *
+      (
+        viewport.height /
+        imageHeight
+      )
+  };
+}
+
+function getIntersectionArea(
+  rectA,
+  rectB
+) {
+  const left =
+    Math.max(
+      rectA.x,
+      rectB.x
+    );
+
+  const top =
+    Math.max(
+      rectA.y,
+      rectB.y
+    );
+
+  const right =
+    Math.min(
+      rectA.x +
+        rectA.width,
+      rectB.x +
+        rectB.width
+    );
+
+  const bottom =
+    Math.min(
+      rectA.y +
+        rectA.height,
+      rectB.y +
+        rectB.height
+    );
+
+  const width =
+    Math.max(
+      0,
+      right - left
+    );
+
+  const height =
+    Math.max(
+      0,
+      bottom - top
+    );
+
+  return width * height;
+}
+
+function getOverlapScore(
+  domRect,
+  visualRect
+) {
+  const intersection =
+    getIntersectionArea(
+      domRect,
+      visualRect
+    );
+
+  if (
+    intersection <= 0
+  ) {
+    return 0;
+  }
+
+  const visualArea =
+    visualRect.width *
+    visualRect.height;
+
+  if (
+    visualArea <= 0
+  ) {
+    return 0;
+  }
+
+  return (
+    intersection /
+    visualArea
+  );
+}
+
+function mapVisualItemsToDomElements(
+  domElements,
+  visualItems,
+  imageInfo,
+  viewport,
+  minimumOverlap = 0.3
+) {
+  return visualItems.map(
+    (item, itemIndex) => {
+      const originalRect =
+        getAnalysisRect(item);
+
+      if (!originalRect) {
+        return {
+          ...item,
+
+          visualItemId:
+            item.visualItemId ||
+            `visual_item_${itemIndex + 1}`,
+
+          mapping: {
+            mapped:
+              false,
+
+            matchedElements:
+              []
+          }
+        };
+      }
+
+      const viewportRect =
+        scaleAnalysisRect(
+          originalRect,
+          imageInfo,
+          viewport
+        );
+
+      const matchedElements =
+        domElements
+          .map((element) => {
+            const score =
+              getOverlapScore(
+                element.rect,
+                viewportRect
+              );
+
+            return {
+              element,
+              score
+            };
+          })
+          .filter(
+            ({ score }) =>
+              score >=
+              minimumOverlap
+          )
+          .sort(
+            (a, b) =>
+              b.score -
+              a.score
+          )
+          .map(
+            ({
+              element,
+              score
+            }) => ({
+              elementId:
+                element.elementId,
+
+              tag:
+                element.tag,
+
+              category:
+                element.category,
+
+              text:
+                element.text,
+
+              score:
+                Number(
+                  score.toFixed(3)
+                )
+            })
+          );
+
+      return {
+        ...item,
+
+        visualItemId:
+          item.visualItemId ||
+          `visual_item_${itemIndex + 1}`,
+
+        mapping: {
+          mapped:
+            matchedElements.length > 0,
+
+          viewportRect,
+
+          matchedElements
+        }
+      };
+    }
+  );
+}
+
+function addVisualMappings(
+  domElements,
+  analysis,
+  page
+) {
+  const imageInfo =
+    analysis.image || {};
+
+  const viewport =
+    page.viewport;
+
+  const mappedTexts =
+    mapVisualItemsToDomElements(
+      domElements,
+      analysis.texts || [],
+      imageInfo,
+      viewport
+    );
+
+  const mappedRegions =
+    mapVisualItemsToDomElements(
+      domElements,
+      analysis.regions || [],
+      imageInfo,
+      viewport,
+      0.2
+    );
+
+  const mappedObjects =
+    mapVisualItemsToDomElements(
+      domElements,
+      analysis.objects || [],
+      imageInfo,
+      viewport,
+      0.2
+    );
+
+  const domElementsWithVisualInfo =
+    domElements.map(
+      (element) => {
+        const mappedTextsForElement =
+          mappedTexts.filter(
+            (item) =>
+              item.mapping
+                .matchedElements
+                .some(
+                  (match) =>
+                    match.elementId ===
+                    element.elementId
+                )
+          );
+
+        const mappedRegionsForElement =
+          mappedRegions.filter(
+            (item) =>
+              item.mapping
+                .matchedElements
+                .some(
+                  (match) =>
+                    match.elementId ===
+                    element.elementId
+                )
+          );
+
+        const mappedObjectsForElement =
+          mappedObjects.filter(
+            (item) =>
+              item.mapping
+                .matchedElements
+                .some(
+                  (match) =>
+                    match.elementId ===
+                    element.elementId
+                )
+          );
+
+        return {
+          ...element,
+
+          visualMapping: {
+            texts:
+              mappedTextsForElement,
+
+            regions:
+              mappedRegionsForElement,
+
+            objects:
+              mappedObjectsForElement,
+
+            hasVisualMatch:
+              mappedTextsForElement.length >
+                0 ||
+              mappedRegionsForElement.length >
+                0 ||
+              mappedObjectsForElement.length >
+                0
+          }
+        };
+      }
+    );
+
+  return {
+    domElementsWithVisualInfo,
+    mappedTexts,
+    mappedRegions,
+    mappedObjects
+  };
+}
+
+function createFinalLocalPerceptionOutput(
+  finalPayload,
+  analysis
+) {
+  const visualMappings =
+    addVisualMappings(
+      finalPayload
+        .domContext
+        .elements,
+      analysis,
+      finalPayload.page
+    );
+
+  const mappedInteractiveElements =
+    visualMappings
+      .domElementsWithVisualInfo
+      .filter(
+        (element) =>
+          [
+            "button",
+            "input",
+            "textarea",
+            "select",
+            "link",
+            "contenteditable"
+          ].includes(
+            element.category
+          )
+      );
+
+  return {
+    page:
+      finalPayload.page,
+
+    visualContext: {
+      sanitizedScreenshot:
+        finalPayload
+          .visualContext
+          .sanitizedScreenshot,
+
+      objects:
+        visualMappings.mappedObjects,
+
+      regions:
+        visualMappings.mappedRegions,
+
+      texts:
+        visualMappings.mappedTexts
+    },
+
+    domContext: {
+      ...finalPayload.domContext,
+
+      elements:
+        visualMappings
+          .domElementsWithVisualInfo,
+
+      interactiveElements:
+        mappedInteractiveElements
+    },
+
+    privacy:
+      finalPayload.privacy,
+
+    detectionSummary:
+      analysis.detection_summary ||
+      {},
+
+    image:
+      analysis.image || {},
+
+    mappingSummary: {
+      totalDomElements:
+        visualMappings
+          .domElementsWithVisualInfo
+          .length,
+
+      elementsWithVisualMatches:
+        visualMappings
+          .domElementsWithVisualInfo
+          .filter(
+            (element) =>
+              element.visualMapping
+                .hasVisualMatch
+          )
+          .length,
+
+      mappedTextRegions:
+        visualMappings
+          .mappedTexts
+          .filter(
+            (item) =>
+              item.mapping.mapped
+          )
+          .length,
+
+      mappedVisualRegions:
+        visualMappings
+          .mappedRegions
+          .filter(
+            (item) =>
+              item.mapping.mapped
+          )
+          .length,
+
+      mappedObjects:
+        visualMappings
+          .mappedObjects
+          .filter(
+            (item) =>
+              item.mapping.mapped
+          )
+          .length
+    },
+
+    timestamp:
+      finalPayload.timestamp
+  };
+}
+
+function getMatchedElementIds(item) {
+  return (
+    item.mapping
+      ?.matchedElements
+      ?.map(
+        (match) =>
+          match.elementId
+      ) || []
+  );
+}
+
+function createCompactVisualTextItem(
+  item
+) {
+  return {
+    visualItemId:
+      item.visualItemId,
+
+    text:
+      sanitizeText(
+        item.text ||
+        item.value ||
+        item.content ||
+        ""
+      ),
+
+    rect:
+      item.mapping
+        ?.viewportRect ||
+      getAnalysisRect(item),
+
+    mappedElementIds:
+      getMatchedElementIds(item)
+  };
+}
+
+function createCompactVisualRegionItem(
+  item
+) {
+  const rect =
+    item.mapping
+      ?.viewportRect ||
+    getAnalysisRect(item);
+
+  return {
+    visualItemId:
+      item.visualItemId,
+
+    type:
+      item.type ||
+      item.class ||
+      item.category ||
+      item.label ||
+      "visual_region",
+
+    rect,
+
+    mappedElementIds:
+      getMatchedElementIds(item)
+  };
+}
+
+function createCompactObjectItem(
+  item
+) {
+  const rect =
+    item.mapping
+      ?.viewportRect ||
+    getAnalysisRect(item);
+
+  return {
+    visualItemId:
+      item.visualItemId,
+
+    class:
+      item.class ||
+      item.label ||
+      item.category ||
+      "object",
+
+    confidence:
+      item.confidence ??
+      item.score ??
+      null,
+
+    rect,
+
+    mappedElementIds:
+      getMatchedElementIds(item)
+  };
+}
+
+function getElementVisualContext(
+  element
+) {
+  const texts =
+    (
+      element.visualMapping
+        ?.texts || []
+    ).map(
+      createCompactVisualTextItem
+    );
+
+  const regions =
+    (
+      element.visualMapping
+        ?.regions || []
+    ).map(
+      createCompactVisualRegionItem
+    );
+
+  const objects =
+    (
+      element.visualMapping
+        ?.objects || []
+    ).map(
+      createCompactObjectItem
+    );
+
+  return {
+    hasVisualMatch:
+      element.visualMapping
+        ?.hasVisualMatch ||
+      false,
+
+    texts,
+    regions,
+    objects
+  };
+}
+
+function createCompactInteractiveElement(
+  element
+) {
+  return {
+    elementId:
+      element.elementId,
+
+    tag:
+      element.tag,
+
+    category:
+      element.category,
+
+    type:
+      element.type,
+
+    text:
+      sanitizeText(
+        element.text
+      ),
+
+    placeholder:
+      sanitizeText(
+        element.placeholder
+      ) || null,
+
+    label:
+      sanitizeText(
+        element.label
+      ) || null,
+
+    rect:
+      element.rect,
+
+    accessibility: {
+      role:
+        element.accessibility
+          ?.role || null,
+
+      ariaLabel:
+        sanitizeText(
+          element.accessibility
+            ?.ariaLabel
+        ) || null,
+
+      accessibleName:
+        sanitizeText(
+          element.accessibility
+            ?.accessibleName
+        ) || null,
+
+      disabled:
+        Boolean(
+          element.accessibility
+            ?.disabled
+        )
+    },
+
+    visualContext:
+      getElementVisualContext(
+        element
+      )
+  };
+}
+
+function createCompactForm(form) {
+  return {
+    formId:
+      form.formId,
+
+    rect:
+      form.rect,
+
+    controls:
+      form.controls.map(
+        (control) => ({
+          controlId:
+            control.controlId,
+
+          tag:
+            control.tag,
+
+          category:
+            control.category,
+
+          type:
+            control.type,
+
+          name:
+            control.name,
+
+          text:
+            sanitizeText(
+              control.text
+            ),
+
+          placeholder:
+            sanitizeText(
+              control.placeholder
+            ) || null,
+
+          label:
+            sanitizeText(
+              control.label
+            ) || null,
+
+          rect:
+            control.rect,
+
+          accessibility: {
+            role:
+              control.accessibility
+                ?.role || null,
+
+            accessibleName:
+              sanitizeText(
+                control.accessibility
+                  ?.accessibleName
+              ) || null,
+
+            disabled:
+              Boolean(
+                control.accessibility
+                  ?.disabled
+              )
+          }
+        })
+      )
+  };
+}
+
+function createBrowserPerceptionState(
+  finalLocalPerceptionOutput
+) {
+  const interactiveElements =
+    finalLocalPerceptionOutput
+      .domContext
+      .interactiveElements
+      .map(
+        createCompactInteractiveElement
+      );
+
+  const forms =
+    finalLocalPerceptionOutput
+      .domContext
+      .forms
+      .map(
+        createCompactForm
+      );
+
+  const visualText =
+    finalLocalPerceptionOutput
+      .visualContext
+      .texts
+      .map(
+        createCompactVisualTextItem
+      );
+
+  const visualRegions =
+    finalLocalPerceptionOutput
+      .visualContext
+      .regions
+      .map(
+        createCompactVisualRegionItem
+      );
+
+  const objects =
+    finalLocalPerceptionOutput
+      .visualContext
+      .objects
+      .map(
+        createCompactObjectItem
+      );
+
+  return {
+    page: {
+      url:
+        finalLocalPerceptionOutput
+          .page
+          .url,
+
+      title:
+        finalLocalPerceptionOutput
+          .page
+          .title,
+
+      viewport:
+        finalLocalPerceptionOutput
+          .page
+          .viewport
+    },
+
+    interactiveElements,
+    forms,
+    visualText,
+    visualRegions,
+    objects,
+
+    privacy: {
+      piiDetected:
+        finalLocalPerceptionOutput
+          .privacy
+          .piiDetected,
+
+      redactedRegionCount:
+        finalLocalPerceptionOutput
+          .privacy
+          .redactedRegionCount,
+
+      rawScreenshotIncluded:
+        false
+    },
+
+    summary: {
+      totalElements:
+        finalLocalPerceptionOutput
+          .mappingSummary
+          .totalDomElements,
+
+      interactiveElements:
+        interactiveElements.length,
+
+      mappedElements:
+        finalLocalPerceptionOutput
+          .mappingSummary
+          .elementsWithVisualMatches,
+
+      visualTextRegions:
+        visualText.length,
+
+      mappedTextRegions:
+        finalLocalPerceptionOutput
+          .mappingSummary
+          .mappedTextRegions,
+
+      visualRegions:
+        visualRegions.length,
+
+      mappedVisualRegions:
+        finalLocalPerceptionOutput
+          .mappingSummary
+          .mappedVisualRegions,
+
+      objects:
+        objects.length,
+
+      mappedObjects:
+        finalLocalPerceptionOutput
+          .mappingSummary
+          .mappedObjects,
+
+      forms:
+        forms.length
+    },
+
+    timestamp:
+      finalLocalPerceptionOutput
+        .timestamp
+  };
+}
+
+function sendBrowserPerceptionState(
+  browserPerceptionState
+) {
+  return new Promise(
+    (resolve, reject) => {
+      chrome.runtime.sendMessage(
+        {
+          type:
+            "SEND_BROWSER_PERCEPTION",
+
+          perceptionState:
+            browserPerceptionState
+        },
+        (response) => {
+          if (
+            chrome.runtime.lastError
+          ) {
+            reject(
+              new Error(
+                chrome.runtime.lastError
+                  .message
+              )
+            );
+
+            return;
+          }
+
+          if (
+            !response?.success
+          ) {
+            reject(
+              new Error(
+                response?.error ||
+                "Failed to send browser perception state"
+              )
+            );
+
+            return;
+          }
+
+          resolve(
+            response.serverResponse
+          );
+        }
+      );
+    }
+  );
+}
+
 function captureScreenshot(
   pageContext
 ) {
@@ -1205,8 +1842,7 @@ function captureScreenshot(
       ) {
         console.error(
           "Could not communicate with background script:",
-          chrome.runtime.lastError
-            .message
+          chrome.runtime.lastError.message
         );
 
         return;
@@ -1240,9 +1876,7 @@ function captureScreenshot(
 
         console.log(
           "Sensitive regions redacted:",
-          pageContext
-            .sensitiveElements
-            .length
+          pageContext.sensitiveElements.length
         );
 
         const finalPayload =
@@ -1268,8 +1902,7 @@ function captureScreenshot(
 
             interactiveElements:
               finalPayload.domContext
-                .interactiveElements
-                .length,
+                .interactiveElements.length,
 
             forms:
               finalPayload.domContext
@@ -1292,9 +1925,131 @@ function captureScreenshot(
         console.log(
           "Sanitized payload is ready for Team Member 2"
         );
+
+        console.log(
+          "Sending sanitized screenshot for analysis..."
+        );
+
+        const analysis =
+          await sendSanitizedScreenshotForAnalysis(
+            sanitizedScreenshot
+          );
+
+        console.log(
+          "LOCAL PERCEPTION ANALYSIS:"
+        );
+
+        console.log(
+          analysis
+        );
+
+        const finalLocalPerceptionOutput =
+          createFinalLocalPerceptionOutput(
+            finalPayload,
+            analysis
+          );
+
+        console.log(
+          "FINAL LOCAL PERCEPTION OUTPUT:"
+        );
+
+        console.log(
+          finalLocalPerceptionOutput
+        );
+
+        console.log(
+          "Final local perception summary:",
+          {
+            domElements:
+              finalLocalPerceptionOutput
+                .domContext
+                .elements.length,
+
+            interactiveElements:
+              finalLocalPerceptionOutput
+                .domContext
+                .interactiveElements.length,
+
+            forms:
+              finalLocalPerceptionOutput
+                .domContext
+                .forms.length,
+
+            objects:
+              finalLocalPerceptionOutput
+                .visualContext
+                .objects.length,
+
+            visualRegions:
+              finalLocalPerceptionOutput
+                .visualContext
+                .regions.length,
+
+            textRegions:
+              finalLocalPerceptionOutput
+                .visualContext
+                .texts.length,
+
+            sensitiveRegions:
+              finalLocalPerceptionOutput
+                .privacy
+                .redactedRegionCount,
+
+            mappingSummary:
+              finalLocalPerceptionOutput
+                .mappingSummary
+          }
+        );
+
+        const browserPerceptionState =
+          createBrowserPerceptionState(
+            finalLocalPerceptionOutput
+          );
+
+        console.log(
+          "BROWSER PERCEPTION STATE:"
+        );
+
+        console.log(
+          browserPerceptionState
+        );
+
+        console.log(
+          "Browser perception state summary:",
+          browserPerceptionState.summary
+        );
+
+        console.log(
+          "Compact browser perception state is ready for Team Member 2"
+        );
+
+        console.log(
+          "Sending browser perception state through background service worker..."
+        );
+
+        const serverResponse =
+          await sendBrowserPerceptionState(
+            browserPerceptionState
+          );
+
+        console.log(
+          "Browser perception state sent successfully"
+        );
+
+        console.log(
+          "SERVER RESPONSE:"
+        );
+
+        console.log(
+          serverResponse
+        );
+
+        console.log(
+          "Sanitized screenshot analysis completed successfully"
+        );
       } catch (error) {
         console.error(
-          "Local screenshot redaction failed:",
+          "Local screenshot processing failed:",
           error.message
         );
       }
@@ -1305,8 +2060,13 @@ function captureScreenshot(
 const pageContext =
   extractPageContext();
 
-console.log("Page Context:");
-console.log(pageContext);
+console.log(
+  "Page Context:"
+);
+
+console.log(
+  pageContext
+);
 
 console.log(
   "Page Context JSON:\n",
@@ -1328,8 +2088,7 @@ console.log(
 
 console.log(
   "DOM elements extracted:",
-  pageContext
-    .domElements.length
+  pageContext.domElements.length
 );
 
 console.log(
@@ -1339,8 +2098,7 @@ console.log(
 
 console.log(
   "Accessibility extracted for:",
-  pageContext
-    .domElements.length,
+  pageContext.domElements.length,
   "elements"
 );
 
