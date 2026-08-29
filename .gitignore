@@ -1,5 +1,45 @@
+# Node.js
 node_modules/
 dist/
-build/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Environment variables
 .env
+
+# IDE
+.vscode/
+.idea/
+
+# OS
 .DS_Store
+Thumbs.db
+
+# Python tooling
+.pytest_cache/
+.mypy_cache/
+
+# Logs
+*.log
+
+# ML model weights
+*.pt
+*.pth
+*.onnx
+
+# Downloaded models
+yolo-opencv/models/
+
+# Generated benchmark files
+benchmarks/results/*
+benchmarks/screenshots/*
+!benchmarks/results/.gitkeep
+!benchmarks/screenshots/.gitkeep
