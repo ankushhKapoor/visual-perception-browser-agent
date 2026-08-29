@@ -6,36 +6,25 @@ console.log(
 const ANALYSIS_API_URL = "http://127.0.0.1:8000/analyze";
 const PERCEPTION_API_URL = "http://127.0.0.1:8000/perception";
 
-async function sendScreenshotForAnalysis(dataUrl) {
-  const response = await fetch(dataUrl);
-  const blob = await response.blob();
-
-  const formData = new FormData();
-
-  formData.append(
-    "image",
-    blob,
-    "screenshot.png"
-  );
-
-  const apiResponse = await fetch(
-    ANALYSIS_API_URL,
-    {
-      method: "POST",
-      body: formData
-    }
-  );
-
-  if (!apiResponse.ok) {
-    const errorText = await apiResponse.text();
-
-    throw new Error(
-      `API analysis failed: ${apiResponse.status} ${errorText}`
-    );
+chrome.action.onClicked.addListener((tab) => {
+  if (typeof tab?.id !== "number") {
+    console.error("Cannot start privacy capture without an active tab.");
+    return;
   }
 
-  return await apiResponse.json();
-}
+  chrome.tabs.sendMessage(
+    tab.id,
+    { type: "RUN_PRIVACY_CAPTURE_AND_ANALYZE" },
+    () => {
+      if (chrome.runtime.lastError) {
+        console.error(
+          "Could not start privacy-first analysis:",
+          chrome.runtime.lastError.message
+        );
+      }
+    }
+  );
+});
 
 async function sendImageForAnalysis(dataUrl) {
   const response = await fetch(dataUrl);
@@ -105,6 +94,14 @@ chrome.runtime.onMessage.addListener(
     if (message.type === "CAPTURE_SCREENSHOT") {
       const windowId = sender.tab?.windowId;
 
+      if (typeof sender.tab?.id !== "number") {
+        sendResponse({
+          success: false,
+          error: "Screenshot capture requires a valid sender tab."
+        });
+        return false;
+      }
+
       chrome.tabs.captureVisibleTab(
         windowId,
         { format: "png" },
@@ -138,15 +135,21 @@ chrome.runtime.onMessage.addListener(
     }
 
     if (message.type === "CAPTURE_AND_ANALYZE") {
-      const windowId = sender.tab?.windowId;
+      if (typeof sender.tab?.id !== "number") {
+        sendResponse({
+          success: false,
+          error: "Analysis requires a valid sender tab."
+        });
+        return false;
+      }
 
-      chrome.tabs.captureVisibleTab(
-        windowId,
-        { format: "png" },
-        async (dataUrl) => {
+      chrome.tabs.sendMessage(
+        sender.tab.id,
+        { type: "RUN_PRIVACY_CAPTURE_AND_ANALYZE" },
+        (result) => {
           if (chrome.runtime.lastError) {
             console.error(
-              "Screenshot capture failed:",
+              "Could not start privacy-first analysis:",
               chrome.runtime.lastError.message
             );
 
@@ -154,38 +157,13 @@ chrome.runtime.onMessage.addListener(
               success: false,
               error: chrome.runtime.lastError.message
             });
-
             return;
           }
 
-          try {
-            console.log(
-              "Screenshot captured. Sending to FastAPI..."
-            );
-
-            const analysis =
-              await sendScreenshotForAnalysis(dataUrl);
-
-            console.log(
-              "Analysis completed successfully:",
-              analysis
-            );
-
-            sendResponse({
-              success: true,
-              analysis: analysis
-            });
-          } catch (error) {
-            console.error(
-              "Screenshot analysis failed:",
-              error
-            );
-
-            sendResponse({
-              success: false,
-              error: error.message
-            });
-          }
+          sendResponse(result || {
+            success: false,
+            error: "Privacy analysis returned no response."
+          });
         }
       );
 
@@ -196,6 +174,14 @@ chrome.runtime.onMessage.addListener(
       message.type ===
       "SEND_SANITIZED_FOR_ANALYSIS"
     ) {
+      if (message.sanitized !== true) {
+        sendResponse({
+          success: false,
+          error: "Only privacy-sanitized screenshots may be analyzed."
+        });
+        return false;
+      }
+
       (async () => {
         try {
           console.log(

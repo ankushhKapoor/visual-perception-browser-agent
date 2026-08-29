@@ -720,6 +720,46 @@
         const gateDecision = content.finalPrivacyGate(payload);
         const serialized = JSON.stringify(gateDecision.safeSummary || payload);
         return rawValues.every((value) => !serialized.includes(value));
+      })(),
+      finalPrivacyGateRegression: (() => {
+        const sanitizedScreenshot = "data:image/png;base64,QUtFX1NBRkVfSU1BR0U=";
+        const basePayload = {
+          visualContext: {
+            sanitizedScreenshot
+          },
+          privacy: {
+            rawScreenshotIncluded: false
+          }
+        };
+
+        const screenshotOnlyDecision = content.finalPrivacyGate(basePayload);
+        const apiKeyDecision = content.finalPrivacyGate({
+          ...basePayload,
+          domContext: {
+            visibleText: "API key=FAKE_SYNTHETIC_TEST_KEY_12345"
+          }
+        });
+        const rawFieldDecisions = ["rawValue", "originalValue", "text", "match"].map((field) =>
+          content.finalPrivacyGate({
+            ...basePayload,
+            domContext: {
+              [field]: "sk_live_FAKE_SYNTHETIC_SECRET_12345"
+            }
+          })
+        );
+        const missingScreenshotDecision = content.finalPrivacyGate({
+          visualContext: {},
+          privacy: {
+            rawScreenshotIncluded: false
+          }
+        });
+
+        return {
+          sanitizedScreenshotExcluded: screenshotOnlyDecision.allowed === true,
+          apiKeyStillBlocked: apiKeyDecision.allowed === false,
+          rawValueFieldsStillBlocked: rawFieldDecisions.every((decision) => decision.allowed === false),
+          missingSanitizedScreenshotStillBlocked: missingScreenshotDecision.allowed === false
+        };
       })()
     };
     const totalTp = engineResults.reduce((sum, item) => sum + item.tp, 0);

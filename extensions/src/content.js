@@ -1543,7 +1543,13 @@ function containsRawSensitiveFields(value) {
   });
 }
 
-function collectStringValues(value, results = []) {
+function collectStringValues(value, results = [], options = {}, path = "$") {
+  const excludedPaths = options.excludedPaths || new Set();
+
+  if (excludedPaths.has(path)) {
+    return results;
+  }
+
   if (value === null || value === undefined) {
     return results;
   }
@@ -1556,12 +1562,16 @@ function collectStringValues(value, results = []) {
   }
 
   if (Array.isArray(value)) {
-    value.forEach((item) => collectStringValues(item, results));
+    value.forEach((item, index) => {
+      collectStringValues(item, results, options, `${path}[${index}]`);
+    });
     return results;
   }
 
   if (typeof value === "object") {
-    Object.values(value).forEach((item) => collectStringValues(item, results));
+    Object.entries(value).forEach(([key, nestedValue]) => {
+      collectStringValues(nestedValue, results, options, `${path}.${key}`);
+    });
   }
 
   return results;
@@ -1607,6 +1617,81 @@ function looksLikeSensitiveString(value) {
   ];
 
   return suspiciousMarkers.some((marker) => lower.includes(marker));
+}
+
+function maskDiagnosticValue(value) {
+  if (value.length <= 8) {
+    return "*".repeat(value.length);
+  }
+
+  const visiblePrefix = value.slice(0, 3);
+  const visibleSuffix = value.slice(-3);
+  return `${visiblePrefix}${"*".repeat(Math.min(value.length - 6, 24))}${visibleSuffix}`;
+}
+
+function getSensitiveStringRule(value) {
+  const deterministicDetections = runAllDeterministicDetectors(value);
+  if (deterministicDetections.length > 0) {
+    return deterministicDetections
+      .map((detection) => detection.piiType || detection.type || "deterministic-detector")
+      .join(", ");
+  }
+
+  const lower = value.toLowerCase();
+  const suspiciousMarkers = [
+    "password",
+    "otp",
+    "api key",
+    "secret",
+    "authorization",
+    "bearer",
+    "session token",
+    "ssn",
+    "aadhaar",
+    "pan number",
+    "email is",
+    "phone is",
+    "dob",
+    "date of birth",
+    "address",
+    "full name"
+  ];
+
+  return suspiciousMarkers.find((marker) => lower.includes(marker)) || "unknown";
+}
+
+function findSuspiciousStringDiagnostics(value, path = "$", results = [], options = {}) {
+  const excludedPaths = options.excludedPaths || new Set();
+
+  if (excludedPaths.has(path)) {
+    return results;
+  }
+
+  if (typeof value === "string") {
+    if (looksLikeSensitiveString(value)) {
+      results.push({
+        path,
+        value: maskDiagnosticValue(value),
+        rule: getSensitiveStringRule(value)
+      });
+    }
+    return results;
+  }
+
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => {
+      findSuspiciousStringDiagnostics(item, `${path}[${index}]`, results, options);
+    });
+    return results;
+  }
+
+  if (value && typeof value === "object") {
+    Object.entries(value).forEach(([key, nestedValue]) => {
+      findSuspiciousStringDiagnostics(nestedValue, `${path}.${key}`, results, options);
+    });
+  }
+
+  return results;
 }
 
 function createSafeOutputContract(payload) {
@@ -1670,9 +1755,22 @@ function finalPrivacyGate(payload) {
   }
 
   const safePayload = createSafeOutputContract(payload);
-  const rawSensitiveFieldsDetected = containsRawSensitiveFields(payload);
-  const allStringValues = collectStringValues(payload);
+  const rawSensitiveFieldsDetected = containsRawSensitiveFields(safePayload);
+  const stringScanOptions = {
+    excludedPaths: new Set([
+      "$.visualContext.sanitizedScreenshot"
+    ])
+  };
+  const allStringValues = collectStringValues(payload, [], stringScanOptions);
   const suspiciousStrings = allStringValues.filter((value) => looksLikeSensitiveString(value));
+  const suspiciousStringDiagnostics = findSuspiciousStringDiagnostics(payload, "$", [], stringScanOptions);
+
+  if (suspiciousStringDiagnostics.length > 0) {
+    console.warn(
+      "Final privacy gate suspicious string diagnostics (local only):",
+      suspiciousStringDiagnostics
+    );
+  }
 
   const hasMissingSanitizedFlags =
     payload.privacy?.rawScreenshotIncluded === true ||
@@ -2068,7 +2166,8 @@ function sendSanitizedScreenshotForAnalysis(sanitizedScreenshot) {
     chromeApi.runtime.sendMessage(
       {
         type: "SEND_SANITIZED_FOR_ANALYSIS",
-        screenshot: sanitizedScreenshot
+        screenshot: sanitizedScreenshot,
+        sanitized: true
       },
       (response) => {
         if (chromeApi.runtime.lastError) {
@@ -2422,10 +2521,11 @@ function captureScreenshot(
               }
             );
 
+            let analysis = null;
             let browserPerceptionState = null;
 
             try {
-              const analysis =
+              analysis =
                 await sendSanitizedScreenshotForAnalysis(
                   sanitizedScreenshot
                 );
@@ -2450,6 +2550,7 @@ function captureScreenshot(
               success: true,
               screenshot: sanitizedScreenshot,
               payload: finalPayload,
+              analysis,
               browserPerceptionState,
               gate: gateDecision
             });
@@ -2463,6 +2564,45 @@ function captureScreenshot(
           }
         }
       );
+    }
+  );
+}
+
+if (
+  typeof chrome !== "undefined" &&
+  chrome.runtime &&
+  typeof chrome.runtime.onMessage?.addListener === "function"
+) {
+  chrome.runtime.onMessage.addListener(
+    (message, sender, sendResponse) => {
+      if (message?.type !== "RUN_PRIVACY_CAPTURE_AND_ANALYZE") {
+        return false;
+      }
+
+      try {
+        const pageContext = extractPageContext();
+
+        captureScreenshot(
+          pageContext,
+          { userInitiated: true }
+        )
+          .then((result) => {
+            sendResponse(result);
+          })
+          .catch((error) => {
+            sendResponse({
+              success: false,
+              error: error.message
+            });
+          });
+      } catch (error) {
+        sendResponse({
+          success: false,
+          error: error.message
+        });
+      }
+
+      return true;
     }
   );
 }

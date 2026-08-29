@@ -4,7 +4,8 @@
   "version": "0.1.0",
   "description": "Privacy-preserving browser vision agent for SIH26171",
   "permissions": [
-    "activeTab"
+    "activeTab",
+    "tabs"
   ],
   "host_permissions": [
     "<all_urls>",
