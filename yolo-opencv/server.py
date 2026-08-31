@@ -1,16 +1,19 @@
 import sys
 import shutil
-import tempfile
+from uuid import uuid4
 from pathlib import Path
 
 import cv2
-from fastapi import FastAPI, File, HTTPException, UploadFile, Request
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, Request
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from combined_detect import analyze_image
 
 
 BASE_DIR = Path(__file__).resolve().parent
+SANITIZED_SCREENSHOTS_DIR = BASE_DIR / "sanitized_screenshots"
+SANITIZED_SCREENSHOTS_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(
     title="Visual Perception Browser Agent API",
@@ -43,8 +46,15 @@ def health():
 
 @app.post("/analyze")
 async def analyze_screenshot(
-    image: UploadFile = File(...)
+    image: UploadFile = File(...),
+    sanitized: str = Form(...)
 ):
+    if sanitized.lower() != "true":
+        raise HTTPException(
+            status_code=400,
+            detail="Only locally sanitized screenshots are accepted"
+        )
+
     if not image.content_type:
         raise HTTPException(
             status_code=400,
@@ -57,32 +67,29 @@ async def analyze_screenshot(
             detail="Uploaded file must be an image"
         )
 
-    suffix = Path(
-        image.filename or "screenshot.png"
-    ).suffix
-
-    if not suffix:
+    suffix = Path(image.filename or "screenshot.png").suffix.lower()
+    if suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
         suffix = ".png"
 
-    temp_file = None
+    screenshot_id = uuid4().hex
+    saved_screenshot = SANITIZED_SCREENSHOTS_DIR / f"{screenshot_id}{suffix}"
 
     try:
-        with tempfile.NamedTemporaryFile(
-            delete=False,
-            suffix=suffix
-        ) as temp:
-            temp_file = Path(temp.name)
-
-            shutil.copyfileobj(
-                image.file,
-                temp
-            )
+        with saved_screenshot.open("wb") as output_file:
+            shutil.copyfileobj(image.file, output_file)
 
         output, annotated_image = analyze_image(
-            temp_file
+            saved_screenshot
         )
 
         output["image"]["source"] = "api_upload"
+        output["image"]["sanitized"] = True
+        output["image"]["savedScreenshot"] = {
+            "id": screenshot_id,
+            "filename": saved_screenshot.name,
+            "path": str(saved_screenshot),
+            "retrievalUrl": f"/saved-screenshots/{saved_screenshot.name}"
+        }
 
         return output
 
@@ -95,11 +102,19 @@ async def analyze_screenshot(
     finally:
         await image.close()
 
-        if (
-            temp_file is not None
-            and temp_file.exists()
-        ):
-            temp_file.unlink()
+
+
+@app.get("/saved-screenshots/{filename}")
+def get_saved_screenshot(filename: str):
+    requested_file = (SANITIZED_SCREENSHOTS_DIR / filename).resolve()
+
+    if requested_file.parent != SANITIZED_SCREENSHOTS_DIR.resolve():
+        raise HTTPException(status_code=400, detail="Invalid screenshot filename")
+
+    if not requested_file.is_file():
+        raise HTTPException(status_code=404, detail="Saved screenshot not found")
+
+    return FileResponse(requested_file)
 
 
 @app.post("/perception")

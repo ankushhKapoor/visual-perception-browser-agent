@@ -38,6 +38,8 @@ async function sendImageForAnalysis(dataUrl) {
     "sanitized_screenshot.png"
   );
 
+  formData.append("sanitized", "true");
+
   const apiResponse = await fetch(
     ANALYSIS_API_URL,
     {

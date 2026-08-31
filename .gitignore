@@ -57,3 +57,6 @@ benchmarks/results/*
 benchmarks/screenshots/*
 !benchmarks/results/.gitkeep
 !benchmarks/screenshots/.gitkeep
+
+# Persisted sanitized screenshots
+yolo-opencv/sanitized_screenshots/*

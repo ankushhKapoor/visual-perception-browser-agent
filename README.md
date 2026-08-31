@@ -318,6 +318,12 @@ POST /analyze
 
 Accepts an image through multipart form data.
 
+The extension sends only the locally redacted screenshot. The backend keeps
+that sanitized upload in `yolo-opencv/sanitized_screenshots/` and does not
+delete it after analysis. The `/analyze` response includes the saved filename,
+local path, and retrieval URL for later VLM processing. Generated screenshots
+are ignored by Git.
+
 ### Input
 
 ```text
