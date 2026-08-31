@@ -125,27 +125,30 @@ async def receive_perception_state(
             {}
         )
 
-        interactive_elements = perception_state.get(
+        dom_context = perception_state.get("domContext", {})
+        visual_context = perception_state.get("visualContext", {})
+
+        interactive_elements = dom_context.get(
             "interactiveElements",
             []
         )
 
-        forms = perception_state.get(
+        forms = dom_context.get(
             "forms",
             []
         )
 
-        visual_text = perception_state.get(
-            "visualText",
+        visual_text = visual_context.get(
+            "texts",
             []
         )
 
-        visual_regions = perception_state.get(
-            "visualRegions",
+        visual_regions = visual_context.get(
+            "regions",
             []
         )
 
-        objects = perception_state.get(
+        objects = visual_context.get(
             "objects",
             []
         )

@@ -1478,19 +1478,13 @@ function sanitizeForms(
 }
 
 const RAW_VALUE_KEYS = new Set([
-  "value",
-  "text",
   "match",
   "originalvalue",
-  "originalValue",
   "rawvalue",
-  "rawValue",
   "rawvalues",
-  "rawValues",
-  "fulltext",
-  "fullText",
-  "sourceText",
-  "sourcetext"
+  "originaltext",
+  "sourcetext",
+  "fulltext"
 ]);
 
 function stripRawSensitiveFields(value) {
@@ -2272,43 +2266,40 @@ function createBrowserPerceptionState(finalPayload, analysis) {
   }));
 
   return stripRawSensitiveFields({
+    schemaVersion: "phase1.v1",
     page: {
       url: sanitizeText(finalPayload.page.url),
       title: sanitizeText(finalPayload.page.title),
       viewport: finalPayload.page.viewport
     },
-    interactiveElements: (domElements.filter((element) => ["button", "input", "textarea", "select", "link", "contenteditable"].includes(element.category))).map((element) => ({
-      elementId: element.elementId,
-      tag: element.tag,
-      category: element.category,
-      type: element.type,
-      text: sanitizeText(element.text),
-      placeholder: sanitizeText(element.placeholder) || null,
-      label: sanitizeText(element.label) || null,
-      rect: element.rect,
-      visualContext: { hasVisualMatch: false }
-    })),
-    forms: finalPayload.domContext.forms.map((form) => ({
-      ...form,
-      action: sanitizeText(form.action),
-      controls: form.controls.map((control) => ({
-        ...control,
-        text: sanitizeText(control.text),
-        placeholder: sanitizeText(control.placeholder),
-        label: sanitizeText(control.label),
-        accessibility: {
-          ...control.accessibility,
-          accessibleName: sanitizeText(control.accessibility?.accessibleName),
-          ariaLabel: sanitizeText(control.accessibility?.ariaLabel)
-        }
-      }))
-    })),
-    visualText: compactText,
-    visualRegions: compactRegions,
-    objects: compactObjects,
+    visualContext: {
+      sanitizedScreenshot: finalPayload.visualContext.sanitizedScreenshot,
+      image: analysis?.image || {},
+      texts: compactText,
+      regions: compactRegions,
+      objects: compactObjects
+    },
+    domContext: {
+      visibleText: sanitizeText(finalPayload.domContext.visibleText),
+      elements: domElements,
+      interactiveElements: domElements
+        .filter((element) => ["button", "input", "textarea", "select", "link", "contenteditable"].includes(element.category))
+        .map((element) => ({
+          elementId: element.elementId,
+          tag: element.tag,
+          category: element.category,
+          type: element.type,
+          text: sanitizeText(element.text),
+          placeholder: sanitizeText(element.placeholder) || null,
+          label: sanitizeText(element.label) || null,
+          rect: element.rect
+        })),
+      forms: finalPayload.domContext.forms
+    },
     privacy: {
       piiDetected: finalPayload.privacy.piiDetected,
       redactedRegionCount: finalPayload.privacy.redactedRegionCount,
+      redactedRegions: finalPayload.privacy.redactedRegions,
       rawScreenshotIncluded: false
     },
     summary: {

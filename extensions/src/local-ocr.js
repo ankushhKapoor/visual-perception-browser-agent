@@ -157,14 +157,3 @@ export default {
   detectOCRTextRegions,
   isOCREnabled
 };
-
-if (typeof module !== 'undefined' && module.exports) {
-  module.exports = {
-    detectOCRTextRegions,
-    isOCREnabled,
-    default: {
-      detectOCRTextRegions,
-      isOCREnabled
-    }
-  };
-}
