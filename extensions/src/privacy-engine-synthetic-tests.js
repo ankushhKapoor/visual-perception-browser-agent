@@ -724,15 +724,72 @@
       finalPrivacyGateRegression: (() => {
         const sanitizedScreenshot = "data:image/png;base64,QUtFX1NBRkVfSU1BR0U=";
         const basePayload = {
+          page: {
+            url: "https://example.test/profile",
+            title: "Privacy demo"
+          },
           visualContext: {
             sanitizedScreenshot
           },
+          domContext: {
+            visibleText: "Department: Computer Engineering",
+            elements: [
+              {
+                category: "input",
+                type: "password",
+                name: "password",
+                id: "password-field",
+                autocomplete: "current-password",
+                text: "[REDACTED]"
+              }
+            ],
+            forms: [
+              {
+                controls: [
+                  {
+                    type: "password",
+                    name: "password",
+                    id: "password-field",
+                    autocomplete: "current-password",
+                    text: "[REDACTED]"
+                  }
+                ]
+              }
+            ]
+          },
           privacy: {
-            rawScreenshotIncluded: false
+            rawScreenshotIncluded: false,
+            redactedRegionCount: 2,
+            redactedRegions: [
+              {
+                piiType: "EMAIL",
+                severity: "HIGH",
+                finalRedactionAction: "MASK",
+                source: "TEXT",
+                rect: { x: 10, y: 20, width: 100, height: 20 }
+              },
+              {
+                piiType: "PASSWORD",
+                severity: "CRITICAL",
+                finalRedactionAction: "BLACKOUT",
+                source: "INPUT",
+                rect: { x: 20, y: 40, width: 100, height: 20 }
+              }
+            ],
+            sanitizationReport: {
+              byType: { EMAIL: 1, PASSWORD: 1 },
+              bySeverity: { HIGH: 1, CRITICAL: 1 }
+            }
           }
         };
 
         const screenshotOnlyDecision = content.finalPrivacyGate(basePayload);
+        const screenshotOnlyHandoff = content.createScreenshotOnlyHandoff
+          ? content.createScreenshotOnlyHandoff(basePayload)
+          : null;
+        const minimalHandoffDecision = screenshotOnlyHandoff
+          ? content.finalPrivacyGate(screenshotOnlyHandoff)
+          : { allowed: false };
         const apiKeyDecision = content.finalPrivacyGate({
           ...basePayload,
           domContext: {
@@ -756,6 +813,20 @@
 
         return {
           sanitizedScreenshotExcluded: screenshotOnlyDecision.allowed === true,
+          screenshotOnlyOutboundContract: Boolean(
+            screenshotOnlyHandoff &&
+            Object.keys(screenshotOnlyHandoff).every((key) => [
+              "sanitizedScreenshot",
+              "sanitized",
+              "redactedRegionCount",
+              "redactedTypes",
+              "redactionMetadata"
+            ].includes(key)) &&
+            !Object.hasOwn(screenshotOnlyHandoff, "page") &&
+            !Object.hasOwn(screenshotOnlyHandoff, "domContext") &&
+            !Object.hasOwn(screenshotOnlyHandoff, "visualText")
+            && minimalHandoffDecision.allowed === true
+          ),
           apiKeyStillBlocked: apiKeyDecision.allowed === false,
           rawValueFieldsStillBlocked: rawFieldDecisions.every((decision) => decision.allowed === false),
           missingSanitizedScreenshotStillBlocked: missingScreenshotDecision.allowed === false

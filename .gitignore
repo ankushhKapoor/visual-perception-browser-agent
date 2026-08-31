@@ -43,3 +43,6 @@ benchmarks/results/*
 benchmarks/screenshots/*
 !benchmarks/results/.gitkeep
 !benchmarks/screenshots/.gitkeep
+
+# Locally persisted sanitized screenshot
+sanitized-output/*

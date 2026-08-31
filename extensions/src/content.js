@@ -1,4 +1,4 @@
-import {
+﻿import {
   classifyInputElement,
   classifyTextPattern,
   getRecommendedRedactionAction,
@@ -851,6 +851,36 @@ function enrichDetectionsWithPositions(fullText, detections) {
   );
 }
 
+function getTextMatchRect(element, searchText) {
+  if (!element || !searchText || typeof document.createRange !== "function") {
+    return null;
+  }
+
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  let node;
+
+  while ((node = walker.nextNode())) {
+    const text = node.textContent || "";
+    const start = text.indexOf(searchText);
+    if (start === -1) continue;
+
+    const range = document.createRange();
+    range.setStart(node, start);
+    range.setEnd(node, start + searchText.length);
+    const rects = Array.from(range.getClientRects());
+    if (rects.length === 0) return null;
+
+    const left = Math.min(...rects.map((rect) => rect.left));
+    const top = Math.min(...rects.map((rect) => rect.top));
+    const right = Math.max(...rects.map((rect) => rect.right));
+    const bottom = Math.max(...rects.map((rect) => rect.bottom));
+
+    return { x: left, y: top, width: right - left, height: bottom - top };
+  }
+
+  return null;
+}
+
 /**
  * Sanitize page text using privacy detections with proper placeholders
  * @param {string} visibleText - Full visible text from page
@@ -878,24 +908,25 @@ function sanitizePageText(visibleText, sensitiveElements) {
 
   try {
     // Enrich detections with text positions
-    const enriched = enrichDetectionsWithPositions(visibleText, sensitiveElements);
+    let enriched = enrichDetectionsWithPositions(visibleText, sensitiveElements);
+
+    // Fusion strips raw values from normalized detections. Re-derive only the
+    // replacement spans from the page text before creating the safe payload.
+    if (enriched.length === 0) {
+      enriched = enrichDetectionsWithPositions(
+        visibleText,
+        runAllDeterministicDetectors(visibleText).map((detection) => ({
+          ...detection,
+          value: detection.match,
+          text: detection.match
+        }))
+      );
+    }
 
     // Sanitize using privacy-sanitizer
     const result = sanitizeTextWithPlaceholders(visibleText, enriched);
 
-    // Create report for logging
     const report = createSanitizationReport(enriched);
-
-    // Do not log raw matches or the original sensitive text.
-    console.log(
-      "Privacy Sanitization Report:",
-      {
-        totalDetections: report.totalDetections,
-        sanitized: report.sanitized,
-        byType: report.byType,
-        bySeverity: report.bySeverity
-      }
-    );
 
     return {
       sanitized: result.sanitized,
@@ -916,6 +947,88 @@ function sanitizePageText(visibleText, sensitiveElements) {
   }
 }
 
+function buildFullTextMap() {
+  // Build a complete map of all visible text in the page with position info
+  const textNodes = [];
+  const walker = document.createTreeWalker(
+    document.body,
+    NodeFilter.SHOW_TEXT,
+    null,
+    false
+  );
+
+  let node;
+  while ((node = walker.nextNode())) {
+    if (!node.textContent.trim()) continue;
+    const parent = node.parentElement;
+    if (!parent || !isElementVisible(parent)) continue;
+    textNodes.push({ node, parent, text: node.textContent });
+  }
+
+  return textNodes;
+}
+
+function findTextRectInNodes(searchText, textNodes) {
+  if (!searchText || !textNodes || textNodes.length === 0) return null;
+
+  for (const { node, parent, text } of textNodes) {
+    const index = text.indexOf(searchText);
+    if (index === -1) continue;
+
+    try {
+      const range = document.createRange();
+      range.setStart(node, index);
+      range.setEnd(node, index + searchText.length);
+      const rects = Array.from(range.getClientRects());
+      if (rects.length === 0) continue;
+
+      const left = Math.min(...rects.map((r) => r.left));
+      const top = Math.min(...rects.map((r) => r.top));
+      const right = Math.max(...rects.map((r) => r.right));
+      const bottom = Math.max(...rects.map((r) => r.bottom));
+
+      return { x: left, y: top, width: right - left, height: bottom - top };
+    } catch (e) {
+      // Fall through to next node
+    }
+  }
+  return null;
+}
+
+function resolveTextContainerRect(searchText, textNodes) {
+  if (!searchText || !textNodes || textNodes.length === 0) return null;
+
+  const exactRect = findTextRectInNodes(searchText, textNodes);
+  if (exactRect) {
+    return exactRect;
+  }
+
+  for (const { node, parent, text } of textNodes) {
+    if (!text || !text.includes(searchText)) continue;
+
+    let candidate = parent;
+    while (candidate && candidate !== document.body) {
+      if (isElementVisible(candidate)) {
+        const candidateText = (candidate.textContent || "").replace(/\s+/g, " ").trim();
+        if (candidateText.includes(searchText)) {
+          const rect = candidate.getBoundingClientRect();
+          if (rect.width > 0 && rect.height > 0) {
+            return {
+              x: rect.left,
+              y: rect.top,
+              width: rect.width,
+              height: rect.height
+            };
+          }
+        }
+      }
+      candidate = candidate.parentElement;
+    }
+  }
+
+  return null;
+}
+
 function getSensitiveTextElements() {
   const excludedTags = new Set([
     "SCRIPT",
@@ -927,137 +1040,124 @@ function getSensitiveTextElements() {
     "OPTION"
   ]);
 
+  const profileNameCandidates = [];
+  document.querySelectorAll(
+    "h1, h2, h3, [class*='name'], [class*='profile'], [id*='name'], [aria-label*='name'], [alt*='person'], [alt*='profile']"
+  ).forEach((element) => {
+    if (!isElementVisible(element)) return;
+    const text = (element.innerText || element.textContent || "").replace(/\s+/g, " ").trim();
+    if (!text || text.length > 80) return;
+    const words = text.split(/\s+/).filter(Boolean);
+    const looksLikeName = words.length >= 2 && words.length <= 4 && words.every((word) => /^[A-Z][A-Za-z'-]+$/.test(word));
+    const notCommonTitle = !/(^|\s)(Department|Project|Status|Dashboard|Settings|Help|Privacy|Visual|Perception|Agent|Account|Contact|Personal|Information|Home|Profile|Reports|Tasks|Projects|University|College|Organization)(\s|$)/i.test(text);
+    if (looksLikeName && notCommonTitle) {
+      profileNameCandidates.push({
+        value: text,
+        rect: getElementRect(element),
+        piiType: "PERSON",
+        severity: "CONTEXT_DEPENDENT",
+        confidence: 0.76,
+        source: "text",
+        finalRedactionAction: "PLACEHOLDER"
+      });
+    }
+  });
+
   const patterns = getPIIPatterns();
+  const detections = [];
+  const seen = new Set();
 
-  return Array.from(
-    document.querySelectorAll("body *")
-  )
-    .filter((element) => {
-      if (
-        excludedTags.has(
-          element.tagName
-        )
-      ) {
-        return false;
+  // Build complete text map for accurate position finding
+  const textNodes = buildFullTextMap();
+  const fullPageText = textNodes.map((tn) => tn.text).join(" ").slice(0, 10000);
+
+  // Scan full page text for regex patterns
+  Object.entries(patterns).forEach(([patternType, pattern]) => {
+    pattern.lastIndex = 0;
+    let match;
+
+    while ((match = pattern.exec(fullPageText)) !== null) {
+      const candidate = match[0];
+      if (patternType === "card") {
+        const cardNumberOnly = candidate.replace(/[\s-]/g, "");
+        if (!isValidLuhn(cardNumberOnly)) continue;
       }
 
-      if (
-        !isElementVisible(element)
-      ) {
-        return false;
-      }
+      const key = `${patternType}:${candidate}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
 
-      const directText =
-        Array.from(
-          element.childNodes
-        )
-          .filter(
-            (node) =>
-              node.nodeType ===
-              Node.TEXT_NODE
-          )
-          .map((node) =>
-            node.textContent.trim()
-          )
-          .filter(Boolean)
-          .join(" ");
-
-      return containsPII(
-        directText
-      );
-    })
-    .map((element) => {
-      const directText =
-        Array.from(
-          element.childNodes
-        )
-          .filter(
-            (node) =>
-              node.nodeType ===
-              Node.TEXT_NODE
-          )
-          .map((node) =>
-            node.textContent.trim()
-          )
-          .filter(Boolean)
-          .join(" ")
-          .slice(0, 200);
+      const rect = resolveTextContainerRect(candidate, textNodes);
+      if (!rect) continue;
 
       const detection = {
-        source:
-          "text",
-
-        tag:
-          element.tagName.toLowerCase(),
-
-        text:
-          directText,
-
-        rect:
-          getElementRect(element)
+        piiType: patternType === "card" ? "CARD" : patternType.toUpperCase(),
+        severity: patternType === "card" ? "CRITICAL" : "HIGH",
+        confidence: 0.95,
+        source: "text",
+        rect,
+        value: candidate,
+        match: candidate,
+        finalRedactionAction: REDACTION_ACTIONS[patternType === "card" ? "CRITICAL" : "HIGH"] || "BLACKOUT",
+        reason: `Visible text ${patternType} match`
       };
 
-      // Find which PII pattern matched (existing regex patterns)
-      let matchedPatternType = null;
-      for (const [patternType, pattern] of Object.entries(patterns)) {
-        pattern.lastIndex = 0;
-        
-        if (pattern.test(directText)) {
-          // For card numbers, validate with Luhn algorithm
-          if (patternType === "card") {
-            // Extract the card number and validate with Luhn
-            const cardPattern = /\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}/;
-            const cardMatch = directText.match(cardPattern);
-            
-            if (cardMatch) {
-              const cardNumberOnly = cardMatch[0].replace(/[\s-]/g, "");
-              
-              // Validate using Luhn algorithm
-              if (isValidLuhn(cardNumberOnly)) {
-                matchedPatternType = patternType;
-                break;
-              }
-            }
-          } else {
-            matchedPatternType = patternType;
-            break;
-          }
-        }
-      }
+      detections.push(detection);
+    }
+  });
 
-      // Classify based on matched pattern
-      let classification = null;
-      if (matchedPatternType) {
-        classification = classifyTextPattern({
-          text: directText,
-          patternType: matchedPatternType
-        });
-        
-        return enrichDetection(detection, classification);
-      }
+  // Scan full page text with deterministic detectors
+  const deterministicDetections = runAllDeterministicDetectors(fullPageText);
+  deterministicDetections.forEach((det) => {
+    const matchText = det.match || det.value;
+    if (!matchText) return;
 
-      // Run deterministic detectors on remaining text
-      const deterministicDetections =
-        runAllDeterministicDetectors(directText);
+    const key = `${det.piiType}:${matchText}`;
+    if (seen.has(key)) return;
+    seen.add(key);
 
-      // Return first detection if any found
-      if (deterministicDetections.length > 0) {
-        const det = deterministicDetections[0];
-        
-        return enrichDetection(detection, {
-          type: det.piiType,
-          severity: det.severity,
-          confidence: det.confidence,
-          recommendedAction:
-            REDACTION_ACTIONS[det.severity],
-          reason: det.context
-        });
-      }
+    const rect = resolveTextContainerRect(matchText, textNodes);
+    if (!rect) return;
 
-      // No PII detected in this element
-      return null;
-    })
-    .filter(Boolean);
+    const detection = {
+      piiType: det.piiType,
+      severity: det.severity || "HIGH",
+      confidence: det.confidence || 0.9,
+      source: "text",
+      rect,
+      value: matchText,
+      match: matchText,
+      finalRedactionAction: REDACTION_ACTIONS[det.severity || "HIGH"] || "BLACKOUT",
+      reason: det.context || `Visible text ${det.piiType} detection`
+    };
+
+    detections.push(detection);
+  });
+
+  profileNameCandidates.forEach((candidate) => {
+    const key = `${candidate.piiType}:${candidate.value}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    if (!candidate.rect || candidate.rect.width <= 0 || candidate.rect.height <= 0) return;
+    detections.push({
+      piiType: candidate.piiType,
+      severity: candidate.severity,
+      confidence: candidate.confidence,
+      source: candidate.source,
+      rect: candidate.rect,
+      value: candidate.value,
+      match: candidate.value,
+      finalRedactionAction: candidate.finalRedactionAction,
+      reason: "Visible profile name fallback"
+    });
+  });
+
+  console.log(
+    "Comprehensive text scanning:",
+    { foundDetections: detections.length, fullPageTextLength: fullPageText.length }
+  );
+
+  return detections.filter(Boolean);
 }
 
 async function detectFacesInScreenshot(dataUrl, options = {}) {
@@ -1095,122 +1195,148 @@ async function detectFacesInScreenshot(dataUrl, options = {}) {
   }
 
   try {
+    // Try Shape Detection API (FaceDetector)
     if ("FaceDetector" in window) {
-      const response = await fetch(dataUrl);
-      const blob = await response.blob();
-      const imageBitmap = await createImageBitmap(blob);
-      const faceDetector = new FaceDetector({
-        fastMode: true,
-        maxDetectedFaces: 10,
-        scoreThreshold: 0.5
-      });
+      console.log("Attempting Shape Detection API face detection...");
+      try {
+        const response = await fetch(dataUrl);
+        const blob = await response.blob();
+        const imageBitmap = await createImageBitmap(blob);
+        const faceDetector = new FaceDetector({
+          fastMode: true,
+          maxDetectedFaces: 10,
+          scoreThreshold: 0.5
+        });
 
-      const detectedFaces = await faceDetector.detect(imageBitmap);
-      imageBitmap.close?.();
+        const detectedFaces = await faceDetector.detect(imageBitmap);
+        console.log(`Shape Detection API found ${detectedFaces.length} faces`);
+        imageBitmap.close?.();
 
-      const screenshotMetrics = getScreenshotMetrics({
-        screenshotWidth: imageBitmap.width,
-        screenshotHeight: imageBitmap.height,
-        viewportWidth: window.innerWidth,
-        viewportHeight: window.innerHeight,
-        scrollX: window.scrollX,
-        scrollY: window.scrollY,
-        devicePixelRatio: window.devicePixelRatio,
-        zoomScale: window.visualViewport ? window.visualViewport.scale : 1
-      });
+        if (detectedFaces.length > 0) {
+          return detectedFaces.map((face) => {
+            const box = face.boundingBox || {};
+            return {
+              piiType: "FACE",
+              type: "FACE",
+              severity: "HIGH",
+              confidence: Number((face.score ?? 0.8).toFixed(3)),
+              source: "FACE",
+              rect: {
+                x: Math.round(box.x || 0),
+                y: Math.round(box.y || 0),
+                width: Math.round(box.width || 1),
+                height: Math.round(box.height || 1)
+              },
+              finalRedactionAction: "BLUR",
+              reason: "Local Shape Detection API face detection",
+              sourceCount: 1,
+              fusedCount: 1,
+              safetyMarginApplied: false
+            };
+          });
+        }
+      } catch (apiError) {
+        console.warn("Shape Detection API face detection failed:", apiError.message);
+      }
+    }
 
-      return detectedFaces.map((face) => {
-        const box = face.boundingBox || {};
-        const rect = convertRectToCanonical(
-          {
-            x: box.x || 0,
-            y: box.y || 0,
-            width: box.width || 0,
-            height: box.height || 0
-          },
-          "face",
-          screenshotMetrics
-        );
+    // Try MediaPipe Face Landmarker if available
+    if (window.FaceLandmarker || window.__PRIVACY_MEDIA_PIPE_FACE_LANDMARKER__) {
+      const faceLandmarker = window.__PRIVACY_MEDIA_PIPE_FACE_LANDMARKER__ || window.FaceLandmarker;
+      if (faceLandmarker && typeof faceLandmarker.detect === "function") {
+        console.log("Attempting MediaPipe face detection...");
+        try {
+          const response = await fetch(dataUrl);
+          const blob = await response.blob();
+          const imageBitmap = await createImageBitmap(blob);
+          const result = faceLandmarker.detect(imageBitmap);
+          const boxes = Array.isArray(result?.faceLandmarks) ? result.faceLandmarks : [];
+          console.log(`MediaPipe found ${boxes.length} faces`);
+          imageBitmap.close?.();
+
+          if (boxes.length > 0) {
+            return boxes.map((landmarks, index) => {
+              const points = landmarks || [];
+              const xs = points.map((point) => Number(point?.x ?? 0));
+              const ys = points.map((point) => Number(point?.y ?? 0));
+              const minX = Math.min(...xs);
+              const maxX = Math.max(...xs);
+              const minY = Math.min(...ys);
+              const maxY = Math.max(...ys);
+
+              return {
+                piiType: "FACE",
+                type: "FACE",
+                severity: "HIGH",
+                confidence: 0.85,
+                source: "FACE",
+                rect: {
+                  x: Math.round(minX),
+                  y: Math.round(minY),
+                  width: Math.round(Math.max(1, maxX - minX)),
+                  height: Math.round(Math.max(1, maxY - minY))
+                },
+                finalRedactionAction: "BLUR",
+                reason: "Local MediaPipe face detection",
+                sourceCount: 1,
+                fusedCount: 1,
+                safetyMarginApplied: false
+              };
+            });
+          }
+        } catch (mediaError) {
+          console.warn("MediaPipe face detection failed:", mediaError.message);
+        }
+      }
+    }
+
+    const profileFaceCandidates = Array.from(
+      document.querySelectorAll("img, [role='img'], [class*='avatar'], [class*='profile'], [alt*='person'], [alt*='profile'], [aria-label*='person'], [aria-label*='profile']")
+    ).filter((element) => isElementVisible(element) && !element.closest("svg"));
+
+    const fallbackFaces = profileFaceCandidates
+      .map((element) => {
+        const rect = element.getBoundingClientRect();
+        const altText = (element.getAttribute("alt") || element.getAttribute("aria-label") || "").toLowerCase();
+        const isLikelyPersonImage = /person|profile|avatar|face|portrait|headshot/.test(altText) || (rect.width > 18 && rect.height > 18 && rect.width / Math.max(rect.height, 1) < 1.5);
+        if (!isLikelyPersonImage) return null;
 
         return {
           piiType: "FACE",
           type: "FACE",
           severity: "HIGH",
-          action: "BLUR",
-          confidence: Number((face.score ?? 0.8).toFixed(3)),
-          source: "FACE",
-          rect,
-          boundingBox: rect,
+          confidence: 0.72,
+          source: "DOM_FACE",
+          rect: {
+            x: Math.round(rect.left),
+            y: Math.round(rect.top),
+            width: Math.round(rect.width),
+            height: Math.round(rect.height)
+          },
+          boundingBox: {
+            x: Math.round(rect.left),
+            y: Math.round(rect.top),
+            width: Math.round(rect.width),
+            height: Math.round(rect.height)
+          },
           finalRedactionAction: "BLUR",
-          reason: "Local browser face detection",
+          reason: "Local profile-image face fallback",
           sourceCount: 1,
           fusedCount: 1,
           safetyMarginApplied: false
         };
-      });
+      })
+      .filter(Boolean);
+
+    if (fallbackFaces.length > 0) {
+      console.log(`Local DOM face fallback found ${fallbackFaces.length} profile-image regions`);
+      return fallbackFaces;
     }
 
-    if (window.FaceLandmarker || window.__PRIVACY_MEDIA_PIPE_FACE_LANDMARKER__) {
-      const faceLandmarker = window.__PRIVACY_MEDIA_PIPE_FACE_LANDMARKER__ || window.FaceLandmarker;
-      if (faceLandmarker && typeof faceLandmarker.detect === "function") {
-        const response = await fetch(dataUrl);
-        const blob = await response.blob();
-        const imageBitmap = await createImageBitmap(blob);
-        const result = faceLandmarker.detect(imageBitmap);
-        const boxes = Array.isArray(result?.faceLandmarks) ? result.faceLandmarks : [];
-        imageBitmap.close?.();
-
-        return boxes.map((landmarks, index) => {
-          const points = landmarks || [];
-          const xs = points.map((point) => Number(point?.x ?? 0));
-          const ys = points.map((point) => Number(point?.y ?? 0));
-          const minX = Math.min(...xs, 0);
-          const maxX = Math.max(...xs, 0);
-          const minY = Math.min(...ys, 0);
-          const maxY = Math.max(...ys, 0);
-          const rect = convertRectToCanonical(
-            {
-              x: minX,
-              y: minY,
-              width: Math.max(1, maxX - minX),
-              height: Math.max(1, maxY - minY)
-            },
-            "face",
-            getScreenshotMetrics({
-              screenshotWidth: options.screenshotWidth || window.innerWidth * window.devicePixelRatio,
-              screenshotHeight: options.screenshotHeight || window.innerHeight * window.devicePixelRatio,
-              viewportWidth: window.innerWidth,
-              viewportHeight: window.innerHeight,
-              scrollX: window.scrollX,
-              scrollY: window.scrollY,
-              devicePixelRatio: window.devicePixelRatio,
-              zoomScale: window.visualViewport ? window.visualViewport.scale : 1
-            })
-          );
-
-          return {
-            piiType: "FACE",
-            type: "FACE",
-            severity: "HIGH",
-            action: "BLUR",
-            confidence: Number((0.8 + (index * 0.05)).toFixed(3)),
-            source: "FACE",
-            rect,
-            boundingBox: rect,
-            finalRedactionAction: "BLUR",
-            reason: "Local MediaPipe face detection",
-            sourceCount: 1,
-            fusedCount: 1,
-            safetyMarginApplied: false
-          };
-        });
-      }
-    }
-
-    console.warn("Face detection is not available in this browser; local face detection is skipped.");
+    console.log("Face detection APIs not available in this browser. Skipping local face detection.");
     return [];
   } catch (error) {
-    console.warn("Local face detection failed:", error.message || error);
+    console.error("Unexpected face detection error:", error.message || error);
     return [];
   }
 }
@@ -1248,9 +1374,10 @@ function getSensitiveElements() {
       [], // mlDetections (not available yet)
       [], // faceDetections (not available yet)
       {
-        overlapThreshold: 0.1,
-        proximityThreshold: 50,
-        safetyMarginPercent: 10
+        overlapThreshold: 0.15,
+        proximityThreshold: 20,
+        safetyMarginPercent: 0,
+        safetyMarginPixels: 2
       }
     );
 
@@ -1543,10 +1670,48 @@ function containsRawSensitiveFields(value) {
   });
 }
 
-function collectStringValues(value, results = [], options = {}, path = "$") {
-  const excludedPaths = options.excludedPaths || new Set();
+const SANITIZED_VISUAL_KEYS = new Set([
+  "sanitizedscreenshot",
+  "screenshot",
+  "imagedata",
+  "blob",
+  "image"
+]);
 
-  if (excludedPaths.has(path)) {
+const SAFE_METADATA_PATHS = [
+  /^\$\.privacy\.redactedRegions\[\d+\]\.(piiType|type|severity|action|finalRedactionAction|recommendedAction|source|reason)$/,
+  /^\$\.privacy\.sanitizationReport\.(byType|bySeverity)\.[^.]+$/,
+  /^\$\.domContext\.(elements|interactiveElements)\[\d+\]\.(type|category|name|id|autocomplete)$/,
+  /^\$\.domContext\.forms\[\d+\]\.controls\[\d+\]\.(type|name|id|autocomplete)$/
+];
+
+function isSafeMetadataPath(path) {
+  return SAFE_METADATA_PATHS.some((pattern) => pattern.test(path));
+}
+
+function getDiagnosticCategory(rule) {
+  const normalizedRule = String(rule || "").toUpperCase();
+  if (normalizedRule.includes("API_KEY") || normalizedRule.includes("PASSWORD") || normalizedRule.includes("OTP") || normalizedRule.includes("TOKEN") || normalizedRule.includes("CARD") || normalizedRule.includes("CVV")) {
+    return "RAW_SENSITIVE_OR_UNSANITIZED_TEXT";
+  }
+  return "SUSPICIOUS_METADATA_OR_TEXT";
+}
+
+function isExcludedSanitizedVisualPath(path, key, options = {}) {
+  if (options.excludedPaths?.has(path)) {
+    return true;
+  }
+
+  if (isSafeMetadataPath(path)) {
+    return true;
+  }
+
+  const normalizedKey = String(key || "").toLowerCase();
+  return path.startsWith("$.visualContext.") && SANITIZED_VISUAL_KEYS.has(normalizedKey);
+}
+
+function collectStringValues(value, results = [], options = {}, path = "$", parentPath = "", key = "") {
+  if (isExcludedSanitizedVisualPath(path, key, options)) {
     return results;
   }
 
@@ -1563,14 +1728,14 @@ function collectStringValues(value, results = [], options = {}, path = "$") {
 
   if (Array.isArray(value)) {
     value.forEach((item, index) => {
-      collectStringValues(item, results, options, `${path}[${index}]`);
+      collectStringValues(item, results, options, `${path}[${index}]`, path, index);
     });
     return results;
   }
 
   if (typeof value === "object") {
     Object.entries(value).forEach(([key, nestedValue]) => {
-      collectStringValues(nestedValue, results, options, `${path}.${key}`);
+      collectStringValues(nestedValue, results, options, `${path}.${key}`, path, key);
     });
   }
 
@@ -1660,10 +1825,8 @@ function getSensitiveStringRule(value) {
   return suspiciousMarkers.find((marker) => lower.includes(marker)) || "unknown";
 }
 
-function findSuspiciousStringDiagnostics(value, path = "$", results = [], options = {}) {
-  const excludedPaths = options.excludedPaths || new Set();
-
-  if (excludedPaths.has(path)) {
+function findSuspiciousStringDiagnostics(value, path = "$", results = [], options = {}, parentPath = "", key = "") {
+  if (isExcludedSanitizedVisualPath(path, key, options)) {
     return results;
   }
 
@@ -1671,8 +1834,13 @@ function findSuspiciousStringDiagnostics(value, path = "$", results = [], option
     if (looksLikeSensitiveString(value)) {
       results.push({
         path,
+        fieldName: key || path.split(".").pop(),
+        type: "SUSPICIOUS_STRING",
+        length: value.length,
         value: maskDiagnosticValue(value),
-        rule: getSensitiveStringRule(value)
+        rule: getSensitiveStringRule(value),
+        category: getDiagnosticCategory(getSensitiveStringRule(value)),
+        severity: "BLOCKING_SCAN_MATCH"
       });
     }
     return results;
@@ -1680,14 +1848,14 @@ function findSuspiciousStringDiagnostics(value, path = "$", results = [], option
 
   if (Array.isArray(value)) {
     value.forEach((item, index) => {
-      findSuspiciousStringDiagnostics(item, `${path}[${index}]`, results, options);
+      findSuspiciousStringDiagnostics(item, `${path}[${index}]`, results, options, path, index);
     });
     return results;
   }
 
   if (value && typeof value === "object") {
     Object.entries(value).forEach(([key, nestedValue]) => {
-      findSuspiciousStringDiagnostics(nestedValue, `${path}.${key}`, results, options);
+      findSuspiciousStringDiagnostics(nestedValue, `${path}.${key}`, results, options, path, key);
     });
   }
 
@@ -1744,6 +1912,18 @@ function createSafeOutputContract(payload) {
   return stripRawSensitiveFields(safePayload);
 }
 
+function logPrivacyGateDecision(decision, payload, suspiciousStringCount) {
+  console.log(
+    "Final privacy gate decision:",
+    {
+      decision,
+      sanitizedScreenshotPresent: payload?.visualContext?.sanitizedScreenshot !== undefined,
+      redactedRegionCount: payload?.privacy?.redactedRegionCount ?? 0,
+      suspiciousStringCount
+    }
+  );
+}
+
 function finalPrivacyGate(payload) {
   if (!payload || typeof payload !== "object") {
     return {
@@ -1754,13 +1934,92 @@ function finalPrivacyGate(payload) {
     };
   }
 
+  if (payload.sanitized === true || Object.hasOwn(payload, "sanitizedScreenshot")) {
+    const allowedKeys = new Set([
+      "sanitized",
+      "sanitizedScreenshot",
+      "redactedRegionCount",
+      "redactedTypes",
+      "redactionMetadata"
+    ]);
+    const unexpectedKeys = Object.keys(payload).filter((key) => !allowedKeys.has(key));
+
+    if (
+      unexpectedKeys.length > 0 ||
+      payload.sanitized !== true ||
+      typeof payload.sanitizedScreenshot !== "string" ||
+      !payload.sanitizedScreenshot
+    ) {
+      console.warn(
+        "Final privacy gate blocked outbound payload:",
+        { reason: "Invalid screenshot-only handoff", unexpectedKeys }
+      );
+      return {
+        allowed: false,
+        decision: "BLOCK",
+        reason: "Invalid screenshot-only handoff",
+        safeSummary: { blocked: true, unexpectedKeys }
+      };
+    }
+
+    const redactedTypes = Array.isArray(payload.redactedTypes)
+      && payload.redactedTypes.every(
+        (type) => typeof type === "string" && /^[A-Z][A-Z0-9_]*$/.test(type)
+      );
+    const redactionMetadata = Array.isArray(payload.redactionMetadata)
+      && payload.redactionMetadata.every((region) => {
+        if (!region || typeof region !== "object") return false;
+        const metadataKeys = new Set(["piiType", "severity", "confidence", "action", "source", "rect"]);
+        return Object.keys(region).every((key) => metadataKeys.has(key))
+          && typeof region.piiType === "string"
+          && /^[A-Z][A-Z0-9_]*$/.test(region.piiType)
+          && typeof region.severity === "string"
+          && /^[A-Z][A-Z0-9_]*$/.test(region.severity)
+          && typeof region.action === "string"
+          && /^[A-Z][A-Z0-9_]*$/.test(region.action)
+          && typeof region.source === "string"
+          && /^[A-Z][A-Z0-9_]*$/.test(region.source);
+      });
+
+    if (!redactedTypes || !redactionMetadata || containsRawSensitiveFields(payload)) {
+      console.warn(
+        "Final privacy gate blocked outbound payload:",
+        { reason: "Unsafe screenshot-only metadata" }
+      );
+      return {
+        allowed: false,
+        decision: "BLOCK",
+        reason: "Unsafe screenshot-only metadata",
+        safeSummary: { blocked: true }
+      };
+    }
+
+    console.log(
+      "Final privacy gate decision:",
+      {
+        decision: "ALLOW",
+        sanitizedScreenshotPresent: true,
+        redactedRegionCount: payload.redactedRegionCount || 0,
+        suspiciousStringCount: 0
+      }
+    );
+
+    return {
+      allowed: true,
+      decision: "ALLOW",
+      reason: "Final privacy gate passed",
+      safeSummary: {
+        sanitized: true,
+        sanitizedScreenshotPresent: true,
+        redactedRegionCount: payload.redactedRegionCount || 0,
+        redactedTypes: payload.redactedTypes
+      }
+    };
+  }
+
   const safePayload = createSafeOutputContract(payload);
   const rawSensitiveFieldsDetected = containsRawSensitiveFields(safePayload);
-  const stringScanOptions = {
-    excludedPaths: new Set([
-      "$.visualContext.sanitizedScreenshot"
-    ])
-  };
+  const stringScanOptions = {};
   const allStringValues = collectStringValues(payload, [], stringScanOptions);
   const suspiciousStrings = allStringValues.filter((value) => looksLikeSensitiveString(value));
   const suspiciousStringDiagnostics = findSuspiciousStringDiagnostics(payload, "$", [], stringScanOptions);
@@ -1777,6 +2036,7 @@ function finalPrivacyGate(payload) {
     payload.visualContext?.sanitizedScreenshot === undefined;
 
   if (rawSensitiveFieldsDetected) {
+    logPrivacyGateDecision("BLOCK", payload, suspiciousStrings.length);
     return {
       allowed: false,
       decision: "BLOCK",
@@ -1790,6 +2050,7 @@ function finalPrivacyGate(payload) {
   }
 
   if (hasMissingSanitizedFlags) {
+    logPrivacyGateDecision("BLOCK", payload, suspiciousStrings.length);
     return {
       allowed: false,
       decision: "BLOCK",
@@ -1803,6 +2064,7 @@ function finalPrivacyGate(payload) {
   }
 
   if (suspiciousStrings.length > 0) {
+    logPrivacyGateDecision("BLOCK", payload, suspiciousStrings.length);
     return {
       allowed: false,
       decision: "BLOCK",
@@ -1816,6 +2078,8 @@ function finalPrivacyGate(payload) {
     };
   }
 
+  logPrivacyGateDecision("ALLOW", payload, suspiciousStrings.length);
+
   return {
     allowed: true,
     decision: "ALLOW",
@@ -1825,6 +2089,32 @@ function finalPrivacyGate(payload) {
       allowed: true,
       decision: "ALLOW"
     }
+  };
+}
+
+function createScreenshotOnlyHandoff(payload) {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  return {
+    sanitizedScreenshot: payload.visualContext?.sanitizedScreenshot,
+    sanitized: true,
+    redactedRegionCount: Number(payload.privacy?.redactedRegionCount || 0),
+    redactedTypes: Object.keys(payload.privacy?.piiTypesSummary || {}),
+    redactionMetadata: (payload.privacy?.redactedRegions || []).map((region) => ({
+      piiType: region.piiType || "UNKNOWN",
+      severity: region.severity || "UNKNOWN",
+      confidence: Number(region.confidence || 0),
+      action: region.finalRedactionAction || "PLACEHOLDER",
+      source: region.source || "fused",
+      rect: region.rect ? {
+        x: Number(region.rect.x),
+        y: Number(region.rect.y),
+        width: Number(region.rect.width),
+        height: Number(region.rect.height)
+      } : null
+    }))
   };
 }
 
@@ -1847,6 +2137,63 @@ function createSanitizedPayload(
       pageContext.sensitiveElements
     );
 
+  const visibleTextSanitization =
+    sanitizePageText(
+      pageContext.visibleText,
+      pageContext.sensitiveElements
+    );
+
+  const redactedRegions =
+    pageContext.sensitiveElements.map((element) => ({
+      piiType:
+        element.piiType || "UNKNOWN",
+
+      severity:
+        element.severity || "UNKNOWN",
+
+      confidence:
+        element.confidence || 0,
+
+      finalRedactionAction:
+        element.finalRedactionAction ||
+        element.action ||
+        "PLACEHOLDER",
+
+      source:
+        element.source || "fused",
+
+      rect:
+        element.rect ||
+        element.boundingBox ||
+        null
+    }));
+
+  const byType = {};
+  const bySeverity = {};
+
+  redactedRegions.forEach((region) => {
+    byType[region.piiType] = (byType[region.piiType] || 0) + 1;
+    bySeverity[region.severity] = (bySeverity[region.severity] || 0) + 1;
+  });
+
+  const sanitizationReport = {
+    ...visibleTextSanitization.report,
+    totalDetections: redactedRegions.length,
+    sanitized: redactedRegions.length,
+    byType,
+    bySeverity
+  };
+
+  console.log(
+    "Privacy Sanitization Report:",
+    {
+      totalDetections: sanitizationReport.totalDetections,
+      sanitized: sanitizationReport.sanitized,
+      byType: sanitizationReport.byType || {},
+      bySeverity: sanitizationReport.bySeverity || {}
+    }
+  );
+
   return {
     page: {
       url:
@@ -1865,10 +2212,7 @@ function createSanitizedPayload(
 
     domContext: {
       visibleText:
-        sanitizePageText(
-          pageContext.visibleText,
-          pageContext.sensitiveElements
-        ).sanitized,
+        visibleTextSanitization.sanitized,
 
       elements:
         sanitizedDomElements,
@@ -1898,14 +2242,10 @@ function createSanitizedPayload(
           .length > 0,
 
       sanitizationReport:
-        sanitizePageText(
-          pageContext.visibleText,
-          pageContext.sensitiveElements
-        ).report,
+        sanitizationReport,
 
       redactedRegions:
-        pageContext.sensitiveElements
-          .map((element) => ({
+        redactedRegions.map((element) => ({
             piiType:
               element.piiType || "UNKNOWN",
 
@@ -2032,64 +2372,89 @@ function redactScreenshot(
           zoomScale: window.visualViewport ? window.visualViewport.scale : 1
         });
 
-        sensitiveElements.forEach(
-          (element) => {
+        console.log(
+          "Screenshot sanitization dimensions:",
+          {
+            original: { width: image.width, height: image.height },
+            viewport: { width: window.innerWidth, height: window.innerHeight },
+            devicePixelRatio: screenshotMetrics.devicePixelRatio,
+            zoomScale: screenshotMetrics.zoomScale,
+            scroll: { x: screenshotMetrics.scrollX, y: screenshotMetrics.scrollY },
+            scale: {
+              x: screenshotMetrics.cssToScreenshotScaleX,
+              y: screenshotMetrics.cssToScreenshotScaleY
+            },
+            detections: sensitiveElements.length
+          }
+        );
+
+        const normalizedRedactionRegions = sensitiveElements
+          .map((element) => {
+            const sourceRect = element.rect || element.boundingBox || { x: 0, y: 0, width: 0, height: 0 };
             const rect = convertRectToCanonical(
-              element.rect,
+              sourceRect,
               element.source || "dom",
               screenshotMetrics
             );
 
-            const x = Math.round(rect.x);
-            const y = Math.round(rect.y);
-            const width = Math.round(rect.width);
-            const height = Math.round(rect.height);
+            const paddedRect = {
+              x: Math.max(0, Math.round(rect.x - 2)),
+              y: Math.max(0, Math.round(rect.y - 2)),
+              width: Math.max(1, Math.round(rect.width + 4)),
+              height: Math.max(1, Math.round(rect.height + 4))
+            };
 
-            // Apply redaction based on final action from fusion engine
-            const redactionAction =
-              element.finalRedactionAction ||
-              element.recommendedAction ||
-              "BLACKOUT";
+            return {
+              type: element.piiType || element.type || "UNKNOWN",
+              source: element.source || "dom",
+              confidence: element.confidence ?? null,
+              inputBoundingBox: sourceRect,
+              mappedScreenshotRect: paddedRect,
+              action: element.finalRedactionAction || element.recommendedAction || "BLACKOUT"
+            };
+          })
+          .filter((region) => region.mappedScreenshotRect.width > 0 && region.mappedScreenshotRect.height > 0);
 
-            if (
-              redactionAction === "BLACKOUT"
-            ) {
-              // Solid black fill for critical PII
-              context.fillStyle = "black";
-              context.fillRect(x, y, width, height);
-            } else if (
-              redactionAction === "MASK"
-            ) {
-              // Dark gray fill for high-severity PII
-              context.fillStyle = "#444444";
-              context.fillRect(x, y, width, height);
+        normalizedRedactionRegions.forEach((region) => {
+          const { x, y, width, height } = region.mappedScreenshotRect;
 
-              // Add a semi-transparent overlay
-              context.fillStyle = "rgba(0, 0, 0, 0.3)";
-              context.fillRect(x, y, width, height);
-            } else if (
-              redactionAction === "PLACEHOLDER"
-            ) {
-              // Medium gray fill for context-dependent PII
-              context.fillStyle = "#999999";
-              context.fillRect(x, y, width, height);
-            } else if (
-              redactionAction === "BLUR"
-            ) {
-              context.save();
-              context.filter = "blur(8px)";
-              context.fillStyle = "rgba(0, 0, 0, 0.9)";
-              context.fillRect(x, y, width, height);
-              context.restore();
+          console.log(
+            "Screenshot redaction region:",
+            {
+              type: region.type,
+              source: region.source,
+              confidence: region.confidence,
+              inputBoundingBox: region.inputBoundingBox,
+              mappedScreenshotRect: { x, y, width, height }
             }
+          );
+
+          if (region.action === "BLACKOUT") {
+            context.fillStyle = "#000000";
+            context.fillRect(x, y, width, height);
+          } else if (region.action === "MASK") {
+            context.fillStyle = "#2d2d2d";
+            context.fillRect(x, y, width, height);
+          } else if (region.action === "PLACEHOLDER") {
+            context.fillStyle = "#7c7c7c";
+            context.fillRect(x, y, width, height);
+          } else if (region.action === "BLUR") {
+            context.save();
+            context.filter = "blur(4px)";
+            context.fillStyle = "rgba(0, 0, 0, 0.92)";
+            context.fillRect(x, y, width, height);
+            context.restore();
           }
+        });
+
+        const sanitizedScreenshot = canvas.toDataURL("image/png");
+
+        console.log(
+          "Sanitized screenshot dimensions:",
+          { width: canvas.width, height: canvas.height }
         );
 
-        resolve(
-          canvas.toDataURL(
-            "image/png"
-          )
-        );
+        resolve(sanitizedScreenshot);
       };
 
       image.onerror = () => {
@@ -2154,7 +2519,7 @@ function sanitizeText(text) {
   return sanitizeTextWithPlaceholders(text, detections).sanitized;
 }
 
-function sendSanitizedScreenshotForAnalysis(sanitizedScreenshot) {
+function sendSanitizedScreenshotForAnalysis(handoffPayload) {
   return new Promise((resolve, reject) => {
     const chromeApi = typeof globalThis !== "undefined" ? globalThis.chrome : undefined;
 
@@ -2166,8 +2531,7 @@ function sendSanitizedScreenshotForAnalysis(sanitizedScreenshot) {
     chromeApi.runtime.sendMessage(
       {
         type: "SEND_SANITIZED_FOR_ANALYSIS",
-        screenshot: sanitizedScreenshot,
-        sanitized: true
+        ...handoffPayload
       },
       (response) => {
         if (chromeApi.runtime.lastError) {
@@ -2301,7 +2665,7 @@ function createBrowserPerceptionState(finalPayload, analysis) {
           accessibleName: sanitizeText(control.accessibility?.accessibleName),
           ariaLabel: sanitizeText(control.accessibility?.ariaLabel)
         }
-      }))
+          }))
     })),
     visualText: compactText,
     visualRegions: compactRegions,
@@ -2462,16 +2826,63 @@ function captureScreenshot(
               sensitiveElements.length
             );
 
-            const finalPayload =
-              createSanitizedPayload(
-                {
-                  ...pageContext,
-                  sensitiveElements
-                },
-                sanitizedScreenshot
+            const sanitizedHandoff = {
+              sanitized: true,
+              sanitizedScreenshot,
+              redactedRegionCount: sensitiveElements.length,
+              redactedTypes: [
+                ...new Set(
+                  sensitiveElements.map(
+                    (element) => element.piiType || element.type || "UNKNOWN"
+                  )
+                )
+              ],
+              redactionMetadata: sensitiveElements.map((element) => ({
+                piiType: element.piiType || element.type || "UNKNOWN",
+                severity: element.severity || "UNKNOWN",
+                confidence: Number(element.confidence || 0),
+                action: element.finalRedactionAction || element.action || "PLACEHOLDER",
+                source: element.source || "fused",
+                rect: element.rect || element.boundingBox || null
+              }))
+            };
+
+            const preGateDiagnostics =
+              findSuspiciousStringDiagnostics(
+                sanitizedHandoff,
+                "$",
+                [],
+                {}
               );
 
-            const gateDecision = finalPrivacyGate(finalPayload);
+            console.log(
+              "Final privacy gate payload diagnostics (local only):",
+              {
+                topLevelKeys: Object.keys(sanitizedHandoff),
+                visualContextKeys: [],
+                sanitizedScreenshotPresent:
+                  sanitizedHandoff.sanitizedScreenshot !== undefined,
+                sanitizedScreenshotLength:
+                  sanitizedHandoff.sanitizedScreenshot.length,
+                rawScreenshotIncluded: false,
+                redactedRegionCount:
+                  sanitizedHandoff.redactedRegionCount,
+                redactedTypes: sanitizedHandoff.redactedTypes,
+                suspiciousDiagnostics:
+                  preGateDiagnostics.map((diagnostic) => ({
+                    path: diagnostic.path,
+                    fieldName: diagnostic.fieldName,
+                    type: diagnostic.type,
+                    length: diagnostic.length,
+                    rule: diagnostic.rule,
+                    category: diagnostic.category,
+                    severity: diagnostic.severity,
+                    maskedPreview: diagnostic.value
+                  }))
+              }
+            );
+
+            const gateDecision = finalPrivacyGate(sanitizedHandoff);
 
             if (!gateDecision.allowed) {
               console.warn(
@@ -2488,47 +2899,38 @@ function captureScreenshot(
 
             console.log(
               "Final privacy gate passed:",
-              createSafeOutputContract(finalPayload)
+              gateDecision.safeSummary
+            );
+
+            console.log(
+              "Sanitized screenshot handoff started"
             );
 
             console.log(
               "Sanitized payload summary:",
               {
-                domElements:
-                  finalPayload.domContext
-                    .elements.length,
-
-                interactiveElements:
-                  finalPayload.domContext
-                    .interactiveElements
-                    .length,
-
-                forms:
-                  finalPayload.domContext
-                    .forms.length,
-
-                redactedRegions:
-                  finalPayload.privacy
-                    .redactedRegionCount,
-
-                piiDetected:
-                  finalPayload.privacy
-                    .piiDetected,
-
-                rawScreenshotIncluded:
-                  finalPayload.privacy
-                    .rawScreenshotIncluded
+                redactedRegions: sanitizedHandoff.redactedRegionCount,
+                redactedTypes: sanitizedHandoff.redactedTypes,
+                sanitizedScreenshotPresent: true
               }
             );
 
             let analysis = null;
             let browserPerceptionState = null;
+            const finalPayload = createSanitizedPayload(
+              { ...pageContext, sensitiveElements },
+              sanitizedScreenshot
+            );
 
             try {
               analysis =
                 await sendSanitizedScreenshotForAnalysis(
-                  sanitizedScreenshot
+                  sanitizedHandoff
                 );
+
+              console.log(
+                "Sanitized screenshot handoff completed"
+              );
 
               browserPerceptionState =
                 createBrowserPerceptionState(
@@ -2643,6 +3045,7 @@ if (typeof module !== "undefined" && module.exports) {
     extractPageContext,
     sanitizePageText,
     createSanitizedPayload,
+    createScreenshotOnlyHandoff,
     createSafeOutputContract,
     finalPrivacyGate,
     getSensitiveElements,

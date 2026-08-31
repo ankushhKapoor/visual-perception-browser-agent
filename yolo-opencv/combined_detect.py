@@ -39,7 +39,7 @@ IMAGE_OUTPUT_PATH = (
     "combined_detection.png"
 )
 
-MODEL_PATH = "yolo11s.pt"
+MODEL_PATH = PROJECT_DIR / "yolo11s.pt"
 
 
 def calculate_iou(box1, box2):

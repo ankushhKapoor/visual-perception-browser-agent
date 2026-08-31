@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Privacy Classifier
  * Classifies detected PII into categories with severity levels and confidence scores.
  * Provides recommended redaction actions for each detection.
@@ -755,7 +755,8 @@ function detectPhone(text) {
     if (/^\d{4,6}$/.test(candidate.replace(/\D/g, ""))) continue;
 
     detections.push({
-      match: candidate,
+      match: match[1],
+      value: candidate,
       confidence: 0.9,
       context: "Phone/mobile number with explicit context"
     });
@@ -1075,7 +1076,11 @@ function detectEmployeeStudentID(text) {
     "roll no",
     "enrollment number",
     "id number",
-    "registration number"
+    "registration number",
+    "student id:",
+    "employee id:",
+    "student number:",
+    "employee number:"
   ];
   
   const lowerText = text.toLowerCase();
@@ -1085,13 +1090,13 @@ function detectEmployeeStudentID(text) {
   
   if (!hasIDContext) return [];
   
-  // Common ID patterns: 6-12 alphanumeric
-  const idPattern = /\b([A-Z]{2,4})?[-]?(\d{6,12})\b/g;
+  // Common ID patterns: 6-12 alphanumeric, including hyphenated and mixed-case IDs
+  const idPattern = /\b(?:[A-Z]{2,6}(?:[-]?[A-Z0-9]{2,8}){1,4}|[A-Z]{2,4}[-]?(\d{6,12})|[A-Z]{2,6}[-]?[A-Z0-9]{2,8}[-]?[A-Z0-9]{2,8})\b/g;
   
   let match;
   while ((match = idPattern.exec(text)) !== null) {
     // Avoid matching common numbers like years or simple sequences
-    const idPart = match[2];
+    const idPart = match[0];
     if (
       !/^\d{4}$/.test(idPart) && // Not a 4-digit year
       !/(1111|2222|3333|4444|5555|6666|7777|8888|9999|0000)/.test(idPart) // Not repeating digits
@@ -1124,7 +1129,8 @@ function detectDateOfBirth(text) {
     "birth date",
     "date of birth:",
     "born",
-    "birthday"
+    "birthday",
+    "date of birth:"
   ];
   
   const lowerText = text.toLowerCase();
@@ -1134,10 +1140,12 @@ function detectDateOfBirth(text) {
   
   if (!hasDobContext) return [];
   
-  // Common date patterns: DD-MM-YYYY, DD/MM/YYYY, MM-DD-YYYY, etc.
+  // Common date patterns: DD-MM-YYYY, DD/MM/YYYY, MM-DD-YYYY, and month-name dates.
   const datePatterns = [
     /\b(0?[1-9]|[12]\d|3[01])[-\/](0?[1-9]|1[0-2])[-\/](19|20)\d{2}\b/g,
-    /\b(19|20)\d{2}[-\/](0?[1-9]|1[0-2])[-\/](0?[1-9]|[12]\d|3[01])\b/g
+    /\b(19|20)\d{2}[-\/](0?[1-9]|1[0-2])[-\/](0?[1-9]|[12]\d|3[01])\b/g,
+    /\b(0?[1-9]|[12]\d|3[01])\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+(19|20)\d{2}\b/gi,
+    /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+(0?[1-9]|[12]\d|3[01]),?\s+(19|20)\d{2}\b/gi
   ];
   
   for (const pattern of datePatterns) {
@@ -1161,7 +1169,7 @@ function detectDateOfBirth(text) {
  * @returns {Array} - Array of detections
  */
 function detectPersonName(text) {
-  if (!text || text.length > 200) return [];
+  if (!text) return [];
 
   const detections = [];
 
@@ -1171,7 +1179,11 @@ function detectPersonName(text) {
     "last name",
     "your name",
     "contact name",
-    "name:"
+    "name:",
+    "profile name",
+    "account holder",
+    "customer name",
+    "employee name"
   ];
 
   const lowerText = text.toLowerCase();
@@ -1181,7 +1193,7 @@ function detectPersonName(text) {
 
   if (!hasNameContext) return [];
 
-  const namePattern = /(?:full\s+name|first\s+name|last\s+name|your\s+name|contact\s+name|name)\s*(?:[:=]|is)?\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})/g;
+  const namePattern = /(?:full\s+name|first\s+name|last\s+name|your\s+name|contact\s+name|profile\s+name|account\s+holder|customer\s+name|employee\s+name|name)\s*(?:[:=]|is)?\s*([A-Z][A-Za-z'-]+(?:\s+[A-Z][A-Za-z'-]+){1,3})/g;
   let match;
 
   while ((match = namePattern.exec(text)) !== null) {
@@ -1192,7 +1204,7 @@ function detectPersonName(text) {
     if (words.length >= 2 && words.length <= 4 && words.every(word => /^[A-Z][a-z]+$/.test(word))) {
       detections.push({
         match: candidate,
-        confidence: 0.70,
+        confidence: 0.80,
         context: "Person name with context keywords"
       });
     }
@@ -1217,7 +1229,10 @@ function detectAddress(text) {
     "zip:",
     "location",
     "mailing address",
-    "residential address"
+    "residential address",
+    "home address",
+    "current address",
+    "permanent address"
   ];
 
   const lowerText = text.toLowerCase();
@@ -1239,11 +1254,27 @@ function detectAddress(text) {
   );
 
   if (hasAddressWord) {
-    detections.push({
-      match: text,
-      confidence: 0.75,
-      context: "Address pattern with context keywords"
-    });
+    const directAddressMatch = text.match(
+      /\b(?:mailing\s+|residential\s+|home\s+|current\s+|permanent\s+)?address\s*(?:[:=]|is)?\s*([^.!?\n]+)/i
+    );
+
+    const addressCandidate = directAddressMatch?.[1]?.trim();
+    if (addressCandidate) {
+      detections.push({
+        match: addressCandidate,
+        confidence: 0.75,
+        context: "Address pattern with context keywords"
+      });
+    }
+
+    const fallbackLine = text.match(/(?:street|road|avenue|lane|city|state|zip).*?(?:\b(?:\d+\s+[A-Za-z0-9 .,-]+|[A-Z][A-Za-z]+\s+[A-Z][A-Za-z]+.*)\b)/i);
+    if (fallbackLine && fallbackLine[0]) {
+      detections.push({
+        match: fallbackLine[0].trim(),
+        confidence: 0.68,
+        context: "Address-like value with street/location keywords"
+      });
+    }
   }
 
   return detections;
@@ -1310,7 +1341,10 @@ function runAllDeterministicDetectors(text) {
   });
 
   employeeIDResults.forEach(det => {
-    allDetections.push({ ...det, piiType: "EMPLOYEE_ID", severity: "HIGH" });
+    const piiType = /student|roll|enrollment|registration/i.test(det.context)
+      ? "STUDENT_ID"
+      : "EMPLOYEE_ID";
+    allDetections.push({ ...det, piiType, severity: "HIGH" });
   });
 
   dobResults.forEach(det => {
@@ -1353,3 +1387,4 @@ if (typeof module !== "undefined" && module.exports) {
     isValidLuhn
   };
 }
+

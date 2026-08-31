@@ -26,7 +26,7 @@ chrome.action.onClicked.addListener((tab) => {
   );
 });
 
-async function sendImageForAnalysis(dataUrl) {
+async function sendImageForAnalysis(dataUrl, privacyMetadata = {}) {
   const response = await fetch(dataUrl);
   const blob = await response.blob();
 
@@ -36,6 +36,15 @@ async function sendImageForAnalysis(dataUrl) {
     "image",
     blob,
     "sanitized_screenshot.png"
+  );
+  formData.append("sanitized", "true");
+  formData.append(
+    "redactedRegionCount",
+    String(privacyMetadata.redactedRegionCount || 0)
+  );
+  formData.append(
+    "redactedTypes",
+    JSON.stringify(privacyMetadata.redactedTypes || [])
   );
 
   const apiResponse = await fetch(
@@ -190,12 +199,23 @@ chrome.runtime.onMessage.addListener(
 
           const analysis =
             await sendImageForAnalysis(
-              message.screenshot
+              message.sanitizedScreenshot,
+              message
             );
 
           console.log(
             "Sanitized screenshot analysis completed:",
             analysis
+          );
+
+          console.log(
+            "Sanitized screenshot artifact available:",
+            analysis?.image?.sanitized_output ||
+              "/sanitized-screenshot"
+          );
+
+          console.log(
+            "Sanitized screenshot saved"
           );
 
           sendResponse({

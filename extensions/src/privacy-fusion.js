@@ -181,14 +181,19 @@ function convertDOMRectToScreenshot(rect, options = {}) {
   const width = Number.isFinite(rect.width) ? rect.width : 0;
   const height = Number.isFinite(rect.height) ? rect.height : 0;
 
-  const pageX = left + (options.scrollX ?? metrics.scrollX);
-  const pageY = top + (options.scrollY ?? metrics.scrollY);
+  const viewportLeft = options.viewportLeft ?? 0;
+  const viewportTop = options.viewportTop ?? 0;
+  const scrollX = options.scrollX ?? metrics.scrollX ?? 0;
+  const scrollY = options.scrollY ?? metrics.scrollY ?? 0;
+
+  const pageX = left + viewportLeft + scrollX;
+  const pageY = top + viewportTop + scrollY;
 
   const screenshotRect = {
     x: pageX * metrics.cssToScreenshotScaleX,
     y: pageY * metrics.cssToScreenshotScaleY,
-    width: width * metrics.cssToScreenshotScaleX,
-    height: height * metrics.cssToScreenshotScaleY
+    width: Math.max(0, width * metrics.cssToScreenshotScaleX),
+    height: Math.max(0, height * metrics.cssToScreenshotScaleY)
   };
 
   return clampRectToBounds(screenshotRect, metrics.screenshotWidth, metrics.screenshotHeight);
@@ -222,7 +227,7 @@ function convertRectToCanonical(rect, source = 'dom', options = {}) {
 
   const normalizedSource = String(source || 'dom').toLowerCase();
 
-  if (['dom', 'viewport'].includes(normalizedSource)) {
+  if (['dom', 'viewport', 'input', 'text'].includes(normalizedSource)) {
     return convertDOMRectToScreenshot(rect, options);
   }
 
@@ -392,23 +397,28 @@ function fuseDetectionsInRegion(detections) {
  * @param {number} marginPercent - Margin percentage (default 10%)
  * @returns {Object} - Detection with expanded rect
  */
-function applySafetyMargin(detection, marginPercent = 10) {
-  const margin = marginPercent / 100;
-  const rect = detection.rect;
+function applySafetyMargin(detection, marginPercent = 0, fixedMargin = 0) {
+  const rect = detection.rect || { x: 0, y: 0, width: 0, height: 0 };
 
-  const marginX = Math.round(rect.width * margin);
-  const marginY = Math.round(rect.height * margin);
+  const marginX = Math.max(0, fixedMargin ?? 0);
+  const marginY = Math.max(0, fixedMargin ?? 0);
+  const expandedX = Math.max(0, Math.round(rect.width * (marginPercent / 100)));
+  const expandedY = Math.max(0, Math.round(rect.height * (marginPercent / 100)));
+
+  const finalMarginX = Math.max(marginX, expandedX);
+  const finalMarginY = Math.max(marginY, expandedY);
 
   return {
     ...detection,
     rect: {
-      x: Math.max(0, rect.x - marginX),
-      y: Math.max(0, rect.y - marginY),
-      width: rect.width + marginX * 2,
-      height: rect.height + marginY * 2
+      x: Math.max(0, rect.x - finalMarginX),
+      y: Math.max(0, rect.y - finalMarginY),
+      width: Math.max(1, rect.width + finalMarginX * 2),
+      height: Math.max(1, rect.height + finalMarginY * 2)
     },
-    safetyMarginApplied: true,
-    safetyMarginPercent: marginPercent
+    safetyMarginApplied: finalMarginX > 0 || finalMarginY > 0,
+    safetyMarginPercent: marginPercent,
+    safetyMarginPixels: fixedMargin
   };
 }
 
@@ -676,7 +686,8 @@ function runFusionEngine(
   const {
     overlapThreshold = 0.1,
     proximityThreshold = 50,
-    safetyMarginPercent = 10,
+    safetyMarginPercent = 0,
+    safetyMarginPixels = 0,
     deduplicateSources = true
   } = options;
 
@@ -720,7 +731,7 @@ function runFusionEngine(
 
   // Step 5: Apply safety margins
   fused = fused.map(detection =>
-    applySafetyMargin(detection, safetyMarginPercent)
+    applySafetyMargin(detection, safetyMarginPercent, safetyMarginPixels)
   );
 
   // Step 6: Build final redaction metadata without preserving raw PII values.
