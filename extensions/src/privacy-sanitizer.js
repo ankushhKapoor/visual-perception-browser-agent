@@ -1,3 +1,9 @@
+import {
+  PRIVACY_RAW_FIELD_KEYS,
+  PRIVACY_EXPORT_BLOCKLIST,
+  shouldStripPrivacyExportKey
+} from './privacy-core.js';
+
 /**
  * Privacy Sanitizer Module
  * 
@@ -31,22 +37,7 @@ const CRITICAL_PII_TYPES = new Set([
 const SECRET_PLACEHOLDER = '<SECRET>';
 const HIGH_CONFIDENCE_THRESHOLD = 0.70;
 const CONTEXT_DEPENDENT_THRESHOLD = 0.75;
-const SAFE_EXPORT_KEYS = new Set([
-  'value',
-  'text',
-  'match',
-  'rawvalue',
-  'rawValue',
-  'rawvalues',
-  'rawValues',
-  'originalvalue',
-  'originalValue',
-  'originaltext',
-  'sourceText',
-  'sourcetext',
-  'fulltext',
-  'fullText'
-]);
+const SAFE_EXPORT_KEYS = PRIVACY_EXPORT_BLOCKLIST;
 
 function redactSensitiveString(value) {
   if (typeof value !== 'string') {
@@ -81,8 +72,7 @@ function sanitizeForExport(value) {
     const sanitized = {};
 
     Object.entries(value).forEach(([key, nestedValue]) => {
-      const normalizedKey = String(key).toLowerCase();
-      if (SAFE_EXPORT_KEYS.has(key) || SAFE_EXPORT_KEYS.has(normalizedKey)) {
+      if (shouldStripPrivacyExportKey(key)) {
         return;
       }
 

@@ -29,6 +29,11 @@ import {
 } from "./privacy-sanitizer.js";
 
 import {
+  PRIVACY_RAW_FIELD_KEYS,
+  isPrivacyRawFieldKey
+} from "./privacy-core.js";
+
+import {
   detectOCRTextRegions,
   isOCREnabled
 } from "./local-ocr.js";
@@ -1477,22 +1482,7 @@ function sanitizeForms(
   }));
 }
 
-const RAW_VALUE_KEYS = new Set([
-  "value",
-  "text",
-  "match",
-  "originalvalue",
-  "originalValue",
-  "rawvalue",
-  "rawValue",
-  "rawvalues",
-  "rawValues",
-  "originaltext",
-  "sourcetext",
-  "sourceText",
-  "fulltext",
-  "fullText"
-]);
+const RAW_VALUE_KEYS = PRIVACY_RAW_FIELD_KEYS;
 
 function stripRawSensitiveFields(value) {
   if (value === null || value === undefined) {
@@ -1510,8 +1500,7 @@ function stripRawSensitiveFields(value) {
   const sanitized = {};
 
   Object.entries(value).forEach(([key, nestedValue]) => {
-    const normalizedKey = String(key).toLowerCase();
-    if (RAW_VALUE_KEYS.has(key) || RAW_VALUE_KEYS.has(normalizedKey)) {
+    if (isPrivacyRawFieldKey(key)) {
       return;
     }
 
@@ -1535,8 +1524,7 @@ function containsRawSensitiveFields(value) {
   }
 
   return Object.entries(value).some(([key, nestedValue]) => {
-    const normalizedKey = String(key).toLowerCase();
-    if (RAW_VALUE_KEYS.has(key) || RAW_VALUE_KEYS.has(normalizedKey)) {
+    if (isPrivacyRawFieldKey(key)) {
       return true;
     }
 
