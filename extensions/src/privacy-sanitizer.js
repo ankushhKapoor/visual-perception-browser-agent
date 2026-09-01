@@ -32,14 +32,20 @@ const SECRET_PLACEHOLDER = '<SECRET>';
 const HIGH_CONFIDENCE_THRESHOLD = 0.70;
 const CONTEXT_DEPENDENT_THRESHOLD = 0.75;
 const SAFE_EXPORT_KEYS = new Set([
+  'value',
+  'text',
   'match',
   'rawvalue',
+  'rawValue',
   'rawvalues',
+  'rawValues',
   'originalvalue',
+  'originalValue',
   'originaltext',
   'sourceText',
   'sourcetext',
-  'fulltext'
+  'fulltext',
+  'fullText'
 ]);
 
 function redactSensitiveString(value) {

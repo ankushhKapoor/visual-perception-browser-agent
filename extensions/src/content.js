@@ -1478,13 +1478,20 @@ function sanitizeForms(
 }
 
 const RAW_VALUE_KEYS = new Set([
+  "value",
+  "text",
   "match",
   "originalvalue",
+  "originalValue",
   "rawvalue",
+  "rawValue",
   "rawvalues",
+  "rawValues",
   "originaltext",
   "sourcetext",
-  "fulltext"
+  "sourceText",
+  "fulltext",
+  "fullText"
 ]);
 
 function stripRawSensitiveFields(value) {
