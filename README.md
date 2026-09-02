@@ -1,850 +1,315 @@
-
-````md
 # Visual Perception Browser Agent
 
-A browser-based visual perception system that combines **webpage DOM information** with **screenshot-based computer vision** to generate structured information about the currently visible browser page.
+Visual Perception Browser Agent is a privacy-preserving Chrome extension and local computer-vision service. It collects visible webpage structure and screenshots, detects sensitive information locally, redacts it, and sends only sanitized visual/context data to the local FastAPI service.
 
-This project is part of the work for **SIH26171**, focusing on browser perception and visual understanding.
+## Current capabilities
 
----
+### Browser and page perception
 
-## Overview
+The extension extracts the currently visible page's:
 
-Webpages contain two important types of information:
+- URL, title, viewport size, scroll position, and timestamp
+- Visible text
+- Visible DOM elements and bounding boxes
+- Buttons, links, headings, images, inputs, textareas, selects, and content-editable elements
+- Input types, labels, placeholders, ARIA roles, accessible names, and ARIA states
+- Forms and their controls
+- Interactive-element summaries
 
-1. **Structural information**
-   - DOM elements
-   - Buttons
-   - Links
-   - Forms
-   - Input fields
-   - Page metadata
+### Automatic capture triggers
 
-2. **Visual information**
-   - Text rendered on the screen
-   - Images
-   - Visual regions
-   - Objects
-   - Screen coordinates
+The content script schedules a sanitized capture after these page events:
 
-Using only the DOM may miss information that exists visually.
+- `click`
+- `input`
+- `change`
+- `submit`
+- DOM mutations, including added/removed nodes, text changes, and attribute changes
 
-Using only screenshots may miss important semantic and structural information available in the browser.
+Events are debounced for 1.2 seconds and captures are prevented from running concurrently. The extension action button can also start a capture manually. Browser pages that do not allow content scripts, such as Chrome internal pages, cannot be captured.
 
-This project combines both sources of information to build a structured representation of the current browser state.
+## Privacy and sanitization
 
----
+Privacy processing happens in the content script before analysis or persistence of the exported payload.
 
-## Architecture
+### Detection sources
+
+- Sensitive input metadata: password, email, phone, card, CVV, OTP, token, secret, and related field names/types
+- Deterministic text patterns for email, phone, Aadhaar-like IDs, PAN-like IDs, and card numbers
+- Luhn validation for card numbers
+- Context and keyword detection for secrets and credentials
+- Privacy fusion across DOM, text, OCR, ML, and face detections
+- Optional local OCR through Tesseract.js
+- Local face detection when the browser `FaceDetector` API or a compatible MediaPipe face landmarker is available
+
+### Redaction policy
+
+- Critical secrets such as passwords, OTPs, CVVs, cards, API keys, authentication tokens, and session secrets become `<SECRET>` or are blacked out.
+- High-sensitivity values such as email, phone, government IDs, and faces are replaced with typed placeholders such as `<EMAIL_1>` or visually masked/blurred.
+- Context-dependent detections require a confidence threshold before sanitization.
+- Redaction actions include `BLACKOUT`, `MASK`, `PLACEHOLDER`, and `BLUR`.
+- Detection regions are normalized and spatially fused before screenshot redaction.
+- Raw values and raw-sensitive field names are removed from exported payloads.
+- The final privacy gate blocks payloads containing raw sensitive fields, suspicious strings, or missing sanitization flags.
+- The webpage itself is never modified; sanitized copies are generated for export and analysis.
+
+The global flag `window.__ENABLE_LOCAL_OCR__ = true` enables OCR. OCR is disabled by default to avoid unnecessary processing.
+
+## What is logged and where data is saved
+
+### Sanitized text
+
+After each successful capture, the sanitized visible page text is printed in the webpage's DevTools console with:
 
 ```text
-                    ┌─────────────────────┐
-                    │      Webpage        │
-                    └──────────┬──────────┘
-                               │
-                ┌──────────────┴──────────────┐
-                │                             │
-                ▼                             ▼
-       DOM / Browser Context            Screenshot Capture
-                │                             │
-                ▼                             ▼
-       Interactive Elements             Visual Analysis
-       Forms                            ├── OCR
-       Page Information                 ├── Visual Regions
-       Element Metadata                 └── Object Detection
-                │                             │
-                └──────────────┬──────────────┘
-                               │
-                               ▼
-                  Browser Perception State
-                               │
-                               ▼
-                       Local FastAPI Server
-````
-
----
-
-# Features
-
-## Browser Context Extraction
-
-The browser-side component collects useful webpage information, including:
-
-* Current page URL
-* Page title
-* Interactive elements
-* Buttons
-* Links
-* Input fields
-* Forms
-* Element metadata
-* Accessibility-related information
-* Element positions where available
-
----
-
-## Screenshot Capture
-
-The Chrome Extension captures the currently visible browser tab using the Chrome Tabs API.
-
-The screenshot can then be processed by the local visual perception backend.
-
----
-
-## OCR
-
-The visual pipeline extracts text from screenshots.
-
-This helps identify text that may not be directly available through normal DOM extraction.
-
-OCR results can include:
-
-* Detected text
-* Confidence
-* Bounding boxes
-* Spatial coordinates
-
----
-
-## Visual Region Detection
-
-The screenshot analysis pipeline identifies meaningful visual regions and spatial information.
-
-These regions help provide visual context about the webpage.
-
----
-
-## Object Detection
-
-The project includes an OpenCV/YOLO-based visual detection pipeline for detecting objects and visual content.
-
-Detected information can include:
-
-* Object label
-* Confidence
-* Bounding box
-* Position
-
----
-
-## Browser Perception State
-
-The browser and visual information are combined into a structured perception state.
-
-The state can contain information such as:
-
-```json
-{
-  "page": {},
-  "interactiveElements": [],
-  "forms": [],
-  "visualText": [],
-  "visualRegions": [],
-  "objects": [],
-  "privacy": {},
-  "summary": {}
-}
+Sanitized text fetched from screen:
 ```
 
-This structured output can be used by downstream components for further reasoning or browser automation.
+Open the target page, press `F12`, and use the **Console** tab. Raw sensitive values should not appear in the exported/logged sanitized output.
 
----
+### Sanitized screenshots in Downloads
 
-# Project Structure
+Every successful sanitized capture is downloaded automatically to:
+
+```text
+C:\Users\<your-user>\Downloads\Extension_Screenshotss\
+```
+
+Files are named like:
+
+```text
+sanitized_capture_<timestamp>_<id>.png
+```
+
+Chrome's `downloads` permission and `conflictAction: "uniquify"` are used, so existing files are not overwritten.
+
+### Persistent browser-local storage
+
+The extension also keeps each capture in IndexedDB. Database and store names are:
+
+```text
+Database: visual-perception-browser-agent
+Object store: sanitized-captures
+```
+
+Records contain the sanitized screenshot, sanitized text, safe summary, page URL/title, capture reason, timestamp, and IDs. Records are not automatically deleted.
+
+On Windows, the underlying Chrome profile data is normally under:
+
+```text
+%LOCALAPPDATA%\Google\Chrome\User Data\Default\IndexedDB\
+```
+
+Use the extension service worker DevTools **Application -> IndexedDB** view to inspect records safely.
+
+### Backend screenshot archive
+
+When the local API is running, every sanitized screenshot uploaded to `/analyze` is also retained by the Python service in:
+
+```text
+yolo-opencv/sanitized_screenshots/
+```
+
+The API returns the saved filename, filesystem path, and retrieval URL. These generated files are local artifacts and should not be committed.
+
+## Architecture and data flow
+
+```text
+Webpage event
+    |
+    v
+content.js: DOM, accessibility, visible text, local PII detection
+    |
+    v
+background.js: chrome.tabs.captureVisibleTab()
+    |
+    v
+content.js: OCR/face detection, fusion, canvas redaction, privacy gate
+    |                         \
+    |                          +--> Downloads/Extension_Screenshotss/*.png
+    |                          +--> IndexedDB: sanitized-captures
+    v
+POST /analyze with sanitized screenshot only
+    |
+    v
+FastAPI -> OCR, visual regions, YOLO/OpenCV objects -> JSON
+    |
+    v
+POST /perception with sanitized browser perception state
+```
+
+The raw screenshot exists temporarily in the browser capture/redaction flow. It is not sent to the backend, saved by the extension download path, or included in the browser perception payload.
+
+## Repository structure
 
 ```text
 visual-perception-browser-agent/
-│
 ├── extensions/
-│   │
 │   ├── manifest.json
-│   │
 │   └── src/
-│       ├── background.js
-│       └── content.js
-│
-├── benchmarks/
-│   ├── results/
-│   │   └── .gitkeep
-│   │
-│   └── screenshots/
-│       └── .gitkeep
-│
+│       ├── background.js              # MV3 service worker
+│       ├── content.js                 # page extraction, events, redaction flow
+│       ├── local-ocr.js               # optional Tesseract.js OCR
+│       ├── privacy-classifier.js      # local PII classification
+│       ├── privacy-core.js            # raw-field export rules
+│       ├── privacy-fusion.js          # spatial detection fusion
+│       ├── privacy-sanitizer.js       # placeholders and export sanitization
+│       ├── privacy-sanitizer-test.js  # standalone sanitizer tests
+│       └── privacy-engine-synthetic-tests.js
 ├── yolo-opencv/
-│   ├── combined_detect.py
-│   ├── detect.py
-│   ├── opencv_detect.py
-│   └── server.py
-│
-├── .gitignore
-├── README.md
-└── requirements.txt
+│   ├── server.py                      # FastAPI service
+│   ├── combined_detect.py             # OCR and combined visual pipeline
+│   ├── detect.py                      # detection helpers
+│   ├── opencv_detect.py               # OpenCV processing
+│   ├── yolo11s.pt                     # local YOLO weights
+│   └── sanitized_screenshots/         # retained API uploads
+├── backend/                           # reserved backend/planner scaffold
+├── benchmarks/                        # benchmark results and screenshots
+├── privacy-test.html                  # browser privacy test page
+├── index.html                         # project web entry page
+├── package.json                       # Node/Vite build configuration
+├── vite.config.mjs                    # CRX/Vite configuration
+├── requirements.txt                   # Python dependencies
+└── Detailed execution plan.md         # implementation plan
 ```
-
----
-
-# Components
-
-## Chrome Extension
-
-The browser extension is responsible for interacting with the active webpage.
-
-### `extensions/manifest.json`
-
-Defines the Chrome Extension configuration.
-
-The project uses:
-
-* Manifest Version 3
-* Background service worker
-* Content scripts
-* Required browser permissions
-
----
-
-### `extensions/src/content.js`
-
-The content script runs in the webpage context.
-
-Its responsibilities include:
-
-* Collecting webpage information
-* Extracting relevant DOM context
-* Identifying interactive elements
-* Extracting form-related information
-* Communicating with the background service worker
-* Building browser perception information
-
----
-
-### `extensions/src/background.js`
-
-The background service worker handles browser-level operations.
-
-Its responsibilities include:
-
-* Receiving messages from the content script
-* Capturing visible browser screenshots
-* Sending screenshots to the backend
-* Sending sanitized screenshots when required
-* Sending browser perception information to the server
-
----
-
-# Visual Perception Backend
-
-The visual analysis code is located in:
-
-```text
-yolo-opencv/
-```
-
----
-
-## `combined_detect.py`
-
-This file provides the combined visual analysis pipeline.
-
-It is responsible for processing an image and generating structured visual information.
-
-The analysis can include:
-
-* OCR
-* Text detection
-* Bounding boxes
-* Visual regions
-* Object detection
-* Image metadata
-
----
-
-## `detect.py`
-
-Contains detection-related functionality for the visual processing pipeline.
-
----
-
-## `opencv_detect.py`
-
-Contains OpenCV-based image processing and detection functionality.
-
----
-
-## `server.py`
-
-Runs the FastAPI backend.
-
-The server provides endpoints for:
-
-* Checking server health
-* Receiving images for visual analysis
-* Receiving browser perception information
-
----
-
-# API Endpoints
-
-## Root
-
-```http
-GET /
-```
-
-Returns basic information about the API service.
-
----
-
-## Health Check
-
-```http
-GET /health
-```
-
-Example response:
-
-```json
-{
-  "status": "healthy"
-}
-```
-
----
-
-## Screenshot Analysis
-
-```http
-POST /analyze
-```
-
-Accepts an image through multipart form data.
-
-The extension sends only the locally redacted screenshot. The backend keeps
-that sanitized upload in `yolo-opencv/sanitized_screenshots/` and does not
-delete it after analysis. The `/analyze` response includes the saved filename,
-local path, and retrieval URL for later VLM processing. Generated screenshots
-are ignored by Git.
-
-### Input
-
-```text
-image
-```
-
-### Processing Flow
-
-```text
-Screenshot
-    │
-    ▼
-POST /analyze
-    │
-    ▼
-FastAPI Server
-    │
-    ▼
-combined_detect.py
-    │
-    ├── OCR
-    ├── Visual Detection
-    ├── Object Detection
-    └── Bounding Box Processing
-    │
-    ▼
-Structured JSON Result
-```
-
----
-
-## Browser Perception
-
-```http
-POST /perception
-```
-
-Receives the structured browser perception state.
-
-The received information may include:
-
-* Page information
-* Interactive elements
-* Forms
-* Visual text
-* Visual regions
-* Objects
-* Privacy metadata
-* Summary information
-
----
-
-# Message Flow
-
-The extension communicates internally using Chrome runtime messages.
-
-The implemented message flow includes:
-
----
-
-## Capture Screenshot
-
-```text
-content.js
-    │
-    │ CAPTURE_SCREENSHOT
-    ▼
-background.js
-    │
-    ▼
-chrome.tabs.captureVisibleTab()
-    │
-    ▼
-Screenshot
-```
-
----
-
-## Capture and Analyze
-
-```text
-content.js
-    │
-    │ CAPTURE_AND_ANALYZE
-    ▼
-background.js
-    │
-    ▼
-Capture Screenshot
-    │
-    ▼
-POST /analyze
-    │
-    ▼
-Visual Analysis
-```
-
----
-
-## Send Sanitized Screenshot
-
-```text
-SEND_SANITIZED_FOR_ANALYSIS
-```
-
-This message is used to send a sanitized screenshot to the visual analysis backend when integrated with the privacy-processing flow.
-
----
-
-## Send Browser Perception State
-
-```text
-SEND_BROWSER_PERCEPTION
-```
-
-The structured perception state is sent to:
-
-```text
-POST /perception
-```
-
----
-
-# Complete Workflow
-
-```text
-┌─────────────────────┐
-│   User Opens Page   │
-└──────────┬──────────┘
-           │
-           ▼
-┌─────────────────────┐
-│    content.js       │
-│                     │
-│ Extract Browser     │
-│ Context             │
-└──────────┬──────────┘
-           │
-           ▼
-┌─────────────────────┐
-│   background.js     │
-│                     │
-│ Capture Screenshot  │
-└──────────┬──────────┘
-           │
-           ▼
-┌─────────────────────┐
-│   FastAPI Backend   │
-│                     │
-│    POST /analyze    │
-└──────────┬──────────┘
-           │
-           ▼
-┌─────────────────────┐
-│ Visual Perception   │
-│                     │
-│ • OCR               │
-│ • Regions           │
-│ • Objects           │
-│ • Bounding Boxes    │
-└──────────┬──────────┘
-           │
-           ▼
-┌─────────────────────┐
-│ Structured Visual   │
-│ Information         │
-└──────────┬──────────┘
-           │
-           ▼
-┌─────────────────────┐
-│ Browser Perception  │
-│ State               │
-└──────────┬──────────┘
-           │
-           ▼
-┌─────────────────────┐
-│ POST /perception    │
-└─────────────────────┘
-```
-
----
-
-# Installation
 
 ## Prerequisites
 
-Make sure the following are installed:
+- Windows, macOS, or Linux
+- Google Chrome or another Chromium browser with Chrome extension APIs
+- Node.js and npm
+- Python 3.10 or newer recommended
+- Git
+- Python dependencies listed in `requirements.txt`
 
-* Python
-* Google Chrome or another Chromium-based browser
-* Git
+## Installation
 
----
-
-## Clone the Repository
-
-```bash
-git clone <repository-url>
-cd visual-perception-browser-agent
-```
-
----
-
-## Create a Virtual Environment
-
-### Windows
+From the repository root:
 
 ```powershell
+npm install
 python -m venv .venv
 .venv\Scripts\activate
-```
-
-### Linux/macOS
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-```
-
----
-
-## Install Dependencies
-
-```bash
 pip install -r requirements.txt
 ```
 
----
+On macOS/Linux, activate the environment with:
 
-# Running the Backend
-
-Navigate to the backend directory:
-
-```powershell
-cd yolo-opencv
+```bash
+source .venv/bin/activate
 ```
 
-Run:
+## Build and load the extension
+
+Build the unpacked extension:
 
 ```powershell
+npm run build
+```
+
+Then:
+
+1. Open `chrome://extensions`.
+2. Enable **Developer mode**.
+3. Click **Load unpacked**.
+4. Select the generated repository `dist/` directory.
+5. Reload any already-open webpages.
+
+The source manifest is in `extensions/manifest.json`; the Vite/CRX build generates the loadable manifest and service-worker files in `dist/`. After changing extension code or permissions, run the build and reload the extension.
+
+## Run the local visual backend
+
+In a second terminal, from the repository root:
+
+```powershell
+.venv\Scripts\activate
+cd yolo-opencv
 python server.py
 ```
 
-Alternatively, depending on the FastAPI configuration:
-
-```powershell
-uvicorn server:app --reload
-```
-
-The server is expected to run locally on:
+The service listens at:
 
 ```text
 http://127.0.0.1:8000
 ```
 
----
-
-# Checking the Backend
-
-Open:
-
-```text
-http://127.0.0.1:8000/health
-```
-
-Expected response:
-
-```json
-{
-  "status": "healthy"
-}
-```
-
----
-
-# Loading the Chrome Extension
-
-## Step 1
-
-Open Chrome and navigate to:
-
-```text
-chrome://extensions
-```
-
----
-
-## Step 2
-
-Enable:
-
-```text
-Developer mode
-```
-
----
-
-## Step 3
-
-Click:
-
-```text
-Load unpacked
-```
-
----
-
-## Step 4
-
-Select the appropriate extension directory containing:
-
-```text
-manifest.json
-```
-
-For this repository, verify the extension structure before loading and select the directory expected by Chrome.
-
----
-
-# Testing
-
-To test the complete pipeline:
-
-## 1. Start the backend
+The equivalent development command is:
 
 ```powershell
-cd yolo-opencv
-python server.py
+uvicorn server:app --reload
 ```
 
----
+Check that it is running at `http://127.0.0.1:8000/health`. Expected response:
 
-## 2. Verify the backend
-
-Open:
-
-```text
-http://127.0.0.1:8000/health
+```json
+{"status":"healthy"}
 ```
 
----
+## How to use it
 
-## 3. Load the Chrome Extension
+1. Start the backend if visual analysis is required.
+2. Build and load `dist/` in Chrome.
+3. Open a normal webpage containing text, controls, images, or forms.
+4. Open DevTools on that webpage and select **Console**.
+5. Interact with the page or click the extension action.
+6. Watch for event, sanitized-text, redaction, analysis, and local-storage logs.
+7. Open `Downloads\Extension_Screenshotss\` to view the sanitized PNG files.
 
-Load the unpacked extension from:
+The extension can still complete local capture and local storage when the backend is unavailable. Backend analysis and `/perception` delivery are optional; failures are reported in the console without discarding the local sanitized capture.
 
-```text
-chrome://extensions
+## API
+
+### `GET /`
+
+Returns basic service status.
+
+### `GET /health`
+
+Returns `{ "status": "healthy" }`.
+
+### `POST /analyze`
+
+Accepts multipart form data:
+
+- `image`: PNG, JPEG, or WebP image
+- `sanitized`: must be the string `true`
+
+The server rejects non-image files and any request that does not explicitly mark the image as sanitized. It retains the upload in `yolo-opencv/sanitized_screenshots/`, runs the combined OCR/visual pipeline, and returns image metadata, detected text, regions, objects, and saved-file information.
+
+### `GET /saved-screenshots/{filename}`
+
+Retrieves a previously retained backend screenshot. Path traversal outside the screenshot directory is rejected.
+
+### `POST /perception`
+
+Accepts the sanitized browser perception state. The service prints a safe summary containing page metadata, interactive-element count, form count, visual-text count, visual-region count, object count, PII status, and redacted-region count.
+
+## Extension messages
+
+- `CAPTURE_SCREENSHOT`: asks the background worker to capture the visible tab.
+- `RUN_PRIVACY_CAPTURE_AND_ANALYZE`: starts page extraction, redaction, local persistence, and optional backend analysis.
+- `SEND_SANITIZED_FOR_ANALYSIS`: sends only the sanitized screenshot to `/analyze`.
+- `STORE_SANITIZED_CAPTURE`: stores the sanitized screenshot and safe metadata in IndexedDB and Downloads.
+- `SEND_BROWSER_PERCEPTION`: sends the sanitized structured state to `/perception`.
+
+## Testing and known limitation
+
+Build validation:
+
+```powershell
+npm run build
 ```
 
----
+The repository also includes `privacy-sanitizer-test.js`, `privacy-engine-synthetic-tests.js`, and `privacy-test.html` for privacy checks. The current Node synthetic-test runner reaches an existing OCR test-harness error (`detectOCRTextRegions is not a function`); this is separate from the extension build and does not indicate a Vite build failure.
 
-## 4. Open a Test Webpage
+## Security and operational notes
 
-Use a webpage containing:
+- The API is bound for local development at `127.0.0.1:8000`.
+- The backend currently enables permissive CORS for local integration.
+- Do not expose the backend publicly without adding authentication, restricted CORS, request limits, and additional hardening.
+- Sanitization is designed as a privacy boundary, but users should still avoid entering real secrets into test pages.
+- Generated screenshots, model weights, virtual environments, and build output should remain local according to the repository's Git configuration.
 
-* Text
-* Buttons
-* Links
-* Forms
-* Images
+## Current status
 
----
-
-## 5. Trigger the Perception Flow
-
-The expected processing flow is:
-
-```text
-Browser Context
-      +
-Screenshot
-      │
-      ▼
-Visual Analysis
-      │
-      ▼
-Structured Perception Data
-      │
-      ▼
-FastAPI Server
-```
-
----
-
-# Benchmark Directories
-
-The repository contains directories for benchmark data:
-
-```text
-benchmarks/
-├── results/
-└── screenshots/
-```
-
-Generated screenshots and benchmark results are excluded from version control.
-
-The directories are retained using `.gitkeep` files.
-
----
-
-# Model Files
-
-Large model weights are intentionally excluded from the repository.
-
-Examples include:
-
-```text
-*.pt
-*.pth
-*.onnx
-```
-
-If the visual detection pipeline requires a model file, it must be placed in the appropriate local directory before running the detection pipeline.
-
-For example:
-
-```text
-yolo-opencv/models/
-```
-
-or according to the paths configured in the source code.
-
----
-
-# Technologies Used
-
-## Browser
-
-* JavaScript
-* Chrome Extension Manifest V3
-* Chrome Runtime API
-* Chrome Tabs API
-
-## Backend
-
-* Python
-* FastAPI
-* Uvicorn
-
-## Computer Vision
-
-* OpenCV
-* YOLO-based object detection
-* OCR
-* Image processing
-
----
-
-# Current Scope
-
-The current implementation focuses on:
-
-* Browser perception
-* DOM context extraction
-* Interactive element detection
-* Form extraction
-* Screenshot capture
-* OCR-based visual text extraction
-* Visual region processing
-* Object detection
-* Bounding box processing
-* Structured browser perception data
-* Local backend communication
-
----
-
-# Integration
-
-This project is designed to provide browser perception information that can be consumed by downstream components.
-
-The generated structured context can support future stages such as:
-
-```text
-Browser Perception
-        │
-        ▼
-Context Understanding
-        │
-        ▼
-Task Reasoning
-        │
-        ▼
-Action Planning
-        │
-        ▼
-Browser Automation
-```
-
-The current repository primarily focuses on the **browser perception and visual analysis layer**.
-
----
-
-# Important Notes
-
-* The backend currently runs locally.
-* Model weights are not committed to the repository.
-* Generated benchmark screenshots and results are excluded from Git.
-* The project uses a Chrome Extension for browser-side data collection.
-* Visual analysis is performed through the Python backend.
-
----
-
-# Status
-
-## Implemented
-
-* [x] Chrome Extension structure
-* [x] Manifest V3 configuration
-* [x] Content script
-* [x] Background service worker
-* [x] Browser runtime messaging
-* [x] Screenshot capture
-* [x] FastAPI backend
-* [x] Image upload endpoint
-* [x] OCR integration
-* [x] Visual detection pipeline
-* [x] Object detection integration
-* [x] Browser perception endpoint
-* [x] Structured perception data flow
-* [x] Benchmark directory structure
-* [x] Git configuration for generated files and model weights
-
----
+Implemented: Manifest V3 extension, DOM/accessibility extraction, event-triggered capture, screenshot redaction, local PII classification, fusion, optional OCR and face detection, privacy gate, sanitized text logging, permanent IndexedDB storage, Downloads export, FastAPI analysis, OCR/visual/object detection, retained backend screenshots, browser perception delivery, and local privacy test assets.
