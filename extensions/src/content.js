@@ -2503,7 +2503,7 @@ function captureScreenshot(
             }
 
             console.log(
-              "Final privacy gate passed:",
+              "FINAL SANITIZED PAYLOAD SUMMARY:",
               createSafeOutputContract(finalPayload)
             );
 

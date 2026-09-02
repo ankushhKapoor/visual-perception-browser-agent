@@ -40,27 +40,6 @@ async function storeSanitizedCapture(capture) {
   return id;
 }
 
-function downloadSanitizedScreenshot(screenshot, captureId) {
-  return new Promise((resolve, reject) => {
-    chrome.downloads.download(
-      {
-        url: screenshot,
-        filename: `Extension_Screenshotss/sanitized_${captureId}.png`,
-        conflictAction: "uniquify",
-        saveAs: false
-      },
-      (downloadId) => {
-        if (chrome.runtime.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
-          return;
-        }
-
-        resolve(downloadId);
-      }
-    );
-  });
-}
-
 chrome.action.onClicked.addListener((tab) => {
   if (typeof tab?.id !== "number") {
     console.error("Cannot start privacy capture without an active tab.");
@@ -286,17 +265,13 @@ chrome.runtime.onMessage.addListener(
             screenshot: message.screenshot,
             payload: message.payload
           });
-          const downloadId = await downloadSanitizedScreenshot(
-            message.screenshot,
-            id
-          );
-
-          console.log("Sanitized screenshot saved to Downloads:", {
+          console.log("Sanitized screenshot stored locally:", {
             id,
-            downloadId,
-            folder: "Downloads/Extension_Screenshotss"
+            storage: "IndexedDB",
+            database: CAPTURE_DATABASE_NAME,
+            store: CAPTURE_STORE_NAME
           });
-          sendResponse({ success: true, id, downloadId });
+          sendResponse({ success: true, id });
         } catch (error) {
           console.error("Could not store sanitized screenshot locally:", error);
           sendResponse({ success: false, error: error.message });
