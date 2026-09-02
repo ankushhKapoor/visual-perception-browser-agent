@@ -67,22 +67,6 @@ Sanitized text fetched from screen:
 
 Open the target page, press `F12`, and use the **Console** tab. Raw sensitive values should not appear in the exported/logged sanitized output.
 
-### Sanitized screenshots in Downloads
-
-Every successful sanitized capture is downloaded automatically to:
-
-```text
-C:\Users\<your-user>\Downloads\Extension_Screenshotss\
-```
-
-Files are named like:
-
-```text
-sanitized_capture_<timestamp>_<id>.png
-```
-
-Chrome's `downloads` permission and `conflictAction: "uniquify"` are used, so existing files are not overwritten.
-
 ### Persistent browser-local storage
 
 The extension also keeps each capture in IndexedDB. Database and store names are:
@@ -92,7 +76,7 @@ Database: visual-perception-browser-agent
 Object store: sanitized-captures
 ```
 
-Records contain the sanitized screenshot, sanitized text, safe summary, page URL/title, capture reason, timestamp, and IDs. Records are not automatically deleted.
+Records contain the sanitized screenshot, sanitized text, safe summary, page URL/title, capture reason, timestamp, and IDs. Records are not automatically deleted. The extension does not trigger a Chrome download for every event.
 
 On Windows, the underlying Chrome profile data is normally under:
 
@@ -100,7 +84,7 @@ On Windows, the underlying Chrome profile data is normally under:
 %LOCALAPPDATA%\Google\Chrome\User Data\Default\IndexedDB\
 ```
 
-Use the extension service worker DevTools **Application -> IndexedDB** view to inspect records safely.
+Use the extension service worker DevTools **Application -> IndexedDB** view to inspect records safely. This is browser-managed local machine storage; extensions cannot write arbitrary files directly to a Windows folder.
 
 ### Backend screenshot archive
 
@@ -126,7 +110,6 @@ background.js: chrome.tabs.captureVisibleTab()
     v
 content.js: OCR/face detection, fusion, canvas redaction, privacy gate
     |                         \
-    |                          +--> Downloads/Extension_Screenshotss/*.png
     |                          +--> IndexedDB: sanitized-captures
     v
 POST /analyze with sanitized screenshot only
@@ -252,8 +235,8 @@ Check that it is running at `http://127.0.0.1:8000/health`. Expected response:
 3. Open a normal webpage containing text, controls, images, or forms.
 4. Open DevTools on that webpage and select **Console**.
 5. Interact with the page or click the extension action.
-6. Watch for event, sanitized-text, redaction, analysis, and local-storage logs.
-7. Open `Downloads\Extension_Screenshotss\` to view the sanitized PNG files.
+6. Watch for event, final sanitized payload summary, sanitized text, redaction, analysis, and local-storage logs.
+7. Inspect captures through the extension service worker DevTools **Application -> IndexedDB -> visual-perception-browser-agent -> sanitized-captures**.
 
 The extension can still complete local capture and local storage when the backend is unavailable. Backend analysis and `/perception` delivery are optional; failures are reported in the console without discarding the local sanitized capture.
 
@@ -289,7 +272,7 @@ Accepts the sanitized browser perception state. The service prints a safe summar
 - `CAPTURE_SCREENSHOT`: asks the background worker to capture the visible tab.
 - `RUN_PRIVACY_CAPTURE_AND_ANALYZE`: starts page extraction, redaction, local persistence, and optional backend analysis.
 - `SEND_SANITIZED_FOR_ANALYSIS`: sends only the sanitized screenshot to `/analyze`.
-- `STORE_SANITIZED_CAPTURE`: stores the sanitized screenshot and safe metadata in IndexedDB and Downloads.
+- `STORE_SANITIZED_CAPTURE`: stores the sanitized screenshot and safe metadata in IndexedDB without triggering a download.
 - `SEND_BROWSER_PERCEPTION`: sends the sanitized structured state to `/perception`.
 
 ## Testing and known limitation
@@ -312,4 +295,4 @@ The repository also includes `privacy-sanitizer-test.js`, `privacy-engine-synthe
 
 ## Current status
 
-Implemented: Manifest V3 extension, DOM/accessibility extraction, event-triggered capture, screenshot redaction, local PII classification, fusion, optional OCR and face detection, privacy gate, sanitized text logging, permanent IndexedDB storage, Downloads export, FastAPI analysis, OCR/visual/object detection, retained backend screenshots, browser perception delivery, and local privacy test assets.
+Implemented: Manifest V3 extension, DOM/accessibility extraction, event-triggered capture, screenshot redaction, local PII classification, fusion, optional OCR and face detection, privacy gate, final sanitized payload and text logging, permanent IndexedDB storage, FastAPI analysis, OCR/visual/object detection, retained backend screenshots, browser perception delivery, and local privacy test assets.
