@@ -5,6 +5,61 @@ console.log(
 
 const ANALYSIS_API_URL = "http://127.0.0.1:8000/analyze";
 const PERCEPTION_API_URL = "http://127.0.0.1:8000/perception";
+const CAPTURE_DATABASE_NAME = "visual-perception-browser-agent";
+const CAPTURE_STORE_NAME = "sanitized-captures";
+
+function openCaptureDatabase() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(CAPTURE_DATABASE_NAME, 1);
+
+    request.onupgradeneeded = () => {
+      request.result.createObjectStore(CAPTURE_STORE_NAME, { keyPath: "id" });
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function storeSanitizedCapture(capture) {
+  const database = await openCaptureDatabase();
+  const id = `capture_${Date.now()}_${crypto.randomUUID()}`;
+  const record = {
+    id,
+    capturedAt: new Date().toISOString(),
+    ...capture
+  };
+
+  await new Promise((resolve, reject) => {
+    const transaction = database.transaction(CAPTURE_STORE_NAME, "readwrite");
+    transaction.objectStore(CAPTURE_STORE_NAME).put(record);
+    transaction.oncomplete = resolve;
+    transaction.onerror = () => reject(transaction.error);
+  });
+
+  database.close();
+  return id;
+}
+
+function downloadSanitizedScreenshot(screenshot, captureId) {
+  return new Promise((resolve, reject) => {
+    chrome.downloads.download(
+      {
+        url: screenshot,
+        filename: `Extension_Screenshotss/sanitized_${captureId}.png`,
+        conflictAction: "uniquify",
+        saveAs: false
+      },
+      (downloadId) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+
+        resolve(downloadId);
+      }
+    );
+  });
+}
 
 chrome.action.onClicked.addListener((tab) => {
   if (typeof tab?.id !== "number") {
@@ -214,6 +269,37 @@ chrome.runtime.onMessage.addListener(
             success: false,
             error: error.message
           });
+        }
+      })();
+
+      return true;
+    }
+
+    if (message.type === "STORE_SANITIZED_CAPTURE") {
+      (async () => {
+        try {
+          const id = await storeSanitizedCapture({
+            tabId: sender.tab?.id ?? null,
+            url: message.url || "",
+            title: message.title || "",
+            reason: message.reason || "unknown",
+            screenshot: message.screenshot,
+            payload: message.payload
+          });
+          const downloadId = await downloadSanitizedScreenshot(
+            message.screenshot,
+            id
+          );
+
+          console.log("Sanitized screenshot saved to Downloads:", {
+            id,
+            downloadId,
+            folder: "Downloads/Extension_Screenshotss"
+          });
+          sendResponse({ success: true, id, downloadId });
+        } catch (error) {
+          console.error("Could not store sanitized screenshot locally:", error);
+          sendResponse({ success: false, error: error.message });
         }
       })();
 

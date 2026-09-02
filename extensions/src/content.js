@@ -2332,6 +2332,36 @@ function sendBrowserPerceptionState(browserPerceptionState) {
   });
 }
 
+function storeSanitizedCapture(screenshot, payload, reason) {
+  return new Promise((resolve, reject) => {
+    const chromeApi = typeof globalThis !== "undefined" ? globalThis.chrome : undefined;
+    if (!chromeApi?.runtime?.sendMessage) {
+      reject(new Error("Chrome runtime is unavailable for local capture storage"));
+      return;
+    }
+
+    chromeApi.runtime.sendMessage(
+      {
+        type: "STORE_SANITIZED_CAPTURE",
+        screenshot,
+        payload,
+        reason,
+        url: window.location.href,
+        title: document.title
+      },
+      (response) => {
+        if (chromeApi.runtime.lastError) {
+          reject(new Error(chromeApi.runtime.lastError.message));
+        } else if (!response?.success) {
+          reject(new Error(response?.error || "Could not store sanitized capture"));
+        } else {
+          resolve(response.id);
+        }
+      }
+    );
+  });
+}
+
 function captureScreenshot(
   pageContext,
   options = {}
@@ -2507,6 +2537,26 @@ function captureScreenshot(
               }
             );
 
+            console.log(
+              "Sanitized text fetched from screen:",
+              finalPayload.domContext.visibleText
+            );
+
+            try {
+              const captureId = await storeSanitizedCapture(
+                sanitizedScreenshot,
+                {
+                  safeSummary: createSafeOutputContract(finalPayload),
+                  sanitizedText: finalPayload.domContext.visibleText,
+                  timestamp: finalPayload.timestamp
+                },
+                options.reason || "manual"
+              );
+              console.log("Sanitized capture saved locally:", captureId);
+            } catch (storageError) {
+              console.error("Sanitized capture storage failed:", storageError.message);
+            }
+
             let analysis = null;
             let browserPerceptionState = null;
 
@@ -2591,6 +2641,60 @@ if (
       return true;
     }
   );
+}
+
+const AUTOMATIC_CAPTURE_DELAY_MS = 1200;
+let automaticCaptureTimer = null;
+let automaticCaptureInProgress = false;
+
+function scheduleAutomaticCapture(reason) {
+  if (automaticCaptureTimer !== null) {
+    clearTimeout(automaticCaptureTimer);
+  }
+
+  automaticCaptureTimer = setTimeout(async () => {
+    automaticCaptureTimer = null;
+    if (automaticCaptureInProgress || document.visibilityState === "hidden") {
+      return;
+    }
+
+    automaticCaptureInProgress = true;
+    try {
+      const pageContext = extractPageContext();
+      console.log("Website event detected; capturing sanitized page:", reason);
+      const result = await captureScreenshot(pageContext, {
+        userInitiated: true,
+        reason
+      });
+      if (!result.success) {
+        console.warn("Automatic sanitized capture skipped:", result.error);
+      }
+    } catch (error) {
+      console.error("Automatic sanitized capture failed:", error.message);
+    } finally {
+      automaticCaptureInProgress = false;
+    }
+  }, AUTOMATIC_CAPTURE_DELAY_MS);
+}
+
+if (
+  typeof window !== "undefined" &&
+  typeof document !== "undefined" &&
+  typeof document.addEventListener === "function"
+) {
+  ["click", "input", "change", "submit"].forEach((eventName) => {
+    document.addEventListener(eventName, () => scheduleAutomaticCapture(eventName), true);
+  });
+
+  if (typeof MutationObserver === "function" && document.documentElement) {
+    const observer = new MutationObserver(() => scheduleAutomaticCapture("dom-mutation"));
+    observer.observe(document.documentElement, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+      attributes: true
+    });
+  }
 }
 
 if (
