@@ -16,6 +16,9 @@ MAX_AREA_RATIO = 0.80
 IOU_THRESHOLD = 0.70
 CONFIDENCE_THRESHOLD = 0.50
 OCR_CONFIDENCE_THRESHOLD = 0.30
+FACE_CONFIDENCE = 0.90
+REDACTION_MARGIN_RATIO = 0.08
+DEBUG_ANNOTATIONS = False
 
 FIELD_ASSOCIATION_DISTANCE_RATIO = 0.35
 
@@ -39,7 +42,8 @@ IMAGE_OUTPUT_PATH = (
     "combined_detection.png"
 )
 
-MODEL_PATH = "yolo11s.pt"
+MODEL_PATH = str(BASE_DIR / "yolo11s.pt")
+FACE_CASCADE_PATH = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
 
 
 def calculate_iou(box1, box2):
@@ -357,7 +361,7 @@ def detect_text(image_path):
     )
 
     results = reader.readtext(
-        str(image_path)
+        image_path
     )
 
     detected_text = []
@@ -423,6 +427,51 @@ def detect_text(image_path):
         text_id += 1
 
     return detected_text
+
+
+def detect_faces(image):
+    if not hasattr(cv2, "CascadeClassifier"):
+        print("Face cascade unavailable in this OpenCV build")
+        return []
+
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    detector = cv2.CascadeClassifier(FACE_CASCADE_PATH)
+    if detector.empty():
+        return []
+    boxes = detector.detectMultiScale(
+        gray,
+        scaleFactor=1.1,
+        minNeighbors=5,
+        minSize=(30, 30)
+    )
+    return [{
+        "face_id": index + 1,
+        "confidence": FACE_CONFIDENCE,
+        "bounding_box": {
+            "x": int(x),
+            "y": int(y),
+            "width": int(width),
+            "height": int(height)
+        },
+        "redaction": "blur"
+    } for index, (x, y, width, height) in enumerate(boxes)]
+
+
+def blur_faces(image, faces):
+    result = image.copy()
+    image_height, image_width = result.shape[:2]
+    for face in faces:
+        box = face["bounding_box"]
+        margin_x = max(4, int(box["width"] * REDACTION_MARGIN_RATIO))
+        margin_y = max(4, int(box["height"] * REDACTION_MARGIN_RATIO))
+        x1 = max(0, box["x"] - margin_x)
+        y1 = max(0, box["y"] - margin_y)
+        x2 = min(image_width, box["x"] + box["width"] + margin_x)
+        y2 = min(image_height, box["y"] + box["height"] + margin_y)
+        crop = result[y1:y2, x1:x2]
+        if crop.size:
+            result[y1:y2, x1:x2] = cv2.GaussianBlur(crop, (0, 0), 18)
+    return result
 
 
 def add_normalized_object_boxes(
@@ -720,6 +769,20 @@ def detect_sensitive_text_patterns(text):
             })
 
     return matches
+
+
+def sanitize_ocr_text(text):
+    sanitized = str(text)
+    replacements = [
+        ("EMAIL", r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE),
+        ("PHONE_NUMBER", r"\b(?:\+91[\s-]?)?[6-9]\d{9}\b", 0),
+        ("AADHAAR", r"\b\d{4}[\s-]?\d{4}[\s-]?\d{4}\b", 0),
+        ("PAN", r"\b[A-Z]{5}[0-9]{4}[A-Z]\b", re.IGNORECASE),
+        ("CREDIT_CARD", r"\b(?:\d{4}[\s-]?){3}\d{4}\b", 0)
+    ]
+    for category, pattern, flags in replacements:
+        sanitized = re.sub(pattern, f"<{category}_1>", sanitized, flags=flags)
+    return sanitized
 
 
 def horizontal_distance(box1, box2):
@@ -1060,8 +1123,6 @@ def detect_sensitive_information(
             sensitive_information.append({
                 "text_id":
                     text_data["text_id"],
-                "detected_text":
-                    text,
                 "type":
                     match["type"],
                 "severity":
@@ -1312,6 +1373,9 @@ def analyze_image(image_path):
         image.shape[:2]
     )
 
+    faces = detect_faces(image)
+    sanitized_image = blur_faces(image, faces)
+
     print(
         "\nImage dimensions: "
         f"{image_width} x "
@@ -1348,7 +1412,7 @@ def analyze_image(image_path):
         total_contours,
         candidate_regions
     ) = detect_regions(
-        image
+        sanitized_image
     )
 
     print(
@@ -1361,7 +1425,7 @@ def analyze_image(image_path):
     )
 
     texts = detect_text(
-        image_path
+        sanitized_image
     )
 
     texts = (
@@ -1390,6 +1454,28 @@ def analyze_image(image_path):
             image_height
         )
     )
+
+    texts = [
+        {
+            **text_data,
+            "text": sanitize_ocr_text(text_data["text"])
+        }
+        for text_data in texts
+    ]
+
+    for face in faces:
+        box = face["bounding_box"]
+        sensitive_information.append({
+            "type": "FACE",
+            "severity": "HIGH",
+            "detection_source": "FACE_DETECTOR",
+            "bounding_box": box,
+            "normalized_bounding_box": add_normalized_xywh(
+                box, image_width, image_height
+            ),
+            "redaction": "blur",
+            "confidence": face["confidence"]
+        })
 
     print(
         f"Sensitive regions detected: "
@@ -1422,23 +1508,32 @@ def analyze_image(image_path):
             "total_sensitive_regions":
                 len(
                     sensitive_information
-                )
+                ),
+            "total_faces": len(faces)
         },
         "objects": objects,
         "regions": regions,
         "texts": texts,
         "sensitive_information":
-            sensitive_information
+            sensitive_information,
+        "privacy": {
+            "sanitized_before_analysis": True,
+            "face_redaction": "blur",
+            "redacted_regions": len(sensitive_information),
+            "coordinate_system": "image_pixels_origin_top_left"
+        }
     }
 
     annotated_image = (
         draw_detections(
-            image,
+            sanitized_image,
             objects,
             regions,
             texts,
             sensitive_information
         )
+        if DEBUG_ANNOTATIONS
+        else sanitized_image.copy()
     )
 
     return (
