@@ -39,7 +39,5 @@ Thumbs.db
 yolo-opencv/models/
 
 # Generated benchmark files
-benchmarks/results/*
-benchmarks/screenshots/*
-!benchmarks/results/.gitkeep
-!benchmarks/screenshots/.gitkeep
+benchmarks/
+photos/

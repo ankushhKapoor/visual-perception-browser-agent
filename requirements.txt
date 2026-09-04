@@ -14,7 +14,9 @@ librt==0.13.0
 mypy==2.3.0
 mypy_extensions==1.1.0
 numpy==2.5.1
-opencv-contrib-python==5.0.0.93
+opencv-contrib-python==4.10.0.84
+easyocr
+ultralytics
 pathspec==1.1.1
 pydantic==2.13.4
 pydantic_core==2.46.4

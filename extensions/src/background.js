@@ -5,39 +5,40 @@ console.log(
 
 const ANALYSIS_API_URL = "http://127.0.0.1:8000/analyze";
 const PERCEPTION_API_URL = "http://127.0.0.1:8000/perception";
+const captureInProgressTabs = new Set();
 
-async function sendScreenshotForAnalysis(dataUrl) {
-  const response = await fetch(dataUrl);
-  const blob = await response.blob();
-
-  const formData = new FormData();
-
-  formData.append(
-    "image",
-    blob,
-    "screenshot.png"
-  );
-
-  const apiResponse = await fetch(
-    ANALYSIS_API_URL,
-    {
-      method: "POST",
-      body: formData
-    }
-  );
-
-  if (!apiResponse.ok) {
-    const errorText = await apiResponse.text();
-
-    throw new Error(
-      `API analysis failed: ${apiResponse.status} ${errorText}`
-    );
+chrome.action.onClicked.addListener((tab) => {
+  if (!tab.id) {
+    return;
   }
 
-  return await apiResponse.json();
-}
+  console.log("On-demand capture clicked", { tabId: tab.id });
 
-async function sendImageForAnalysis(dataUrl) {
+  chrome.tabs.sendMessage(
+    tab.id,
+    { type: "START_ON_DEMAND_CAPTURE" },
+    () => {
+      if (chrome.runtime.lastError) {
+        console.error(
+          "On-demand capture could not start:",
+          chrome.runtime.lastError.message
+        );
+      }
+    }
+  );
+});
+
+async function sendImageForAnalysis(dataUrl, redactionRegions, privacyProof) {
+  if (
+    typeof dataUrl !== "string" ||
+    !dataUrl.startsWith("data:image/") ||
+    !privacyProof?.sanitized ||
+    privacyProof.rawScreenshotIncluded ||
+    !Array.isArray(privacyProof.redactionMap)
+  ) {
+    throw new Error("Privacy gate blocked screenshot transmission");
+  }
+
   const response = await fetch(dataUrl);
   const blob = await response.blob();
 
@@ -47,6 +48,14 @@ async function sendImageForAnalysis(dataUrl) {
     "image",
     blob,
     "sanitized_screenshot.png"
+  );
+  formData.append(
+    "redaction_regions",
+    JSON.stringify(redactionRegions || [])
+  );
+  formData.append(
+    "privacy_proof",
+    JSON.stringify(privacyProof)
   );
 
   const apiResponse = await fetch(
@@ -99,6 +108,18 @@ chrome.runtime.onMessage.addListener(
     );
 
     if (message.type === "CAPTURE_SCREENSHOT") {
+      console.log("Capturing one screenshot", { tabId: sender.tab?.id });
+      if (!sender.tab?.id) {
+        sendResponse({ success: false, error: "Capture requires an active tab" });
+        return false;
+      }
+
+      if (captureInProgressTabs.has(sender.tab.id)) {
+        sendResponse({ success: false, error: "Capture already in progress" });
+        return false;
+      }
+
+      captureInProgressTabs.add(sender.tab.id);
       const windowId = sender.tab?.windowId;
 
       chrome.tabs.captureVisibleTab(
@@ -106,6 +127,7 @@ chrome.runtime.onMessage.addListener(
         { format: "png" },
         (dataUrl) => {
           if (chrome.runtime.lastError) {
+            captureInProgressTabs.delete(sender.tab.id);
             console.error(
               "Screenshot capture failed:",
               chrome.runtime.lastError.message
@@ -127,6 +149,8 @@ chrome.runtime.onMessage.addListener(
             success: true,
             screenshot: dataUrl
           });
+          console.log("One screenshot captured", { tabId: sender.tab.id });
+          captureInProgressTabs.delete(sender.tab.id);
         }
       );
 
@@ -134,64 +158,21 @@ chrome.runtime.onMessage.addListener(
     }
 
     if (message.type === "CAPTURE_AND_ANALYZE") {
-      const windowId = sender.tab?.windowId;
-
-      chrome.tabs.captureVisibleTab(
-        windowId,
-        { format: "png" },
-        async (dataUrl) => {
-          if (chrome.runtime.lastError) {
-            console.error(
-              "Screenshot capture failed:",
-              chrome.runtime.lastError.message
-            );
-
-            sendResponse({
-              success: false,
-              error: chrome.runtime.lastError.message
-            });
-
-            return;
-          }
-
-          try {
-            console.log(
-              "Screenshot captured. Sending to FastAPI..."
-            );
-
-            const analysis =
-              await sendScreenshotForAnalysis(dataUrl);
-
-            console.log(
-              "Analysis completed successfully:",
-              analysis
-            );
-
-            sendResponse({
-              success: true,
-              analysis: analysis
-            });
-          } catch (error) {
-            console.error(
-              "Screenshot analysis failed:",
-              error
-            );
-
-            sendResponse({
-              success: false,
-              error: error.message
-            });
-          }
-        }
-      );
-
-      return true;
+      sendResponse({
+        success: false,
+        error: "Raw screenshot analysis is disabled; use sanitized analysis"
+      });
+      return false;
     }
 
     if (
       message.type ===
       "SEND_SANITIZED_FOR_ANALYSIS"
     ) {
+      if (!sender.tab?.id) {
+        sendResponse({ success: false, error: "Privacy gate blocked unknown sender" });
+        return false;
+      }
       (async () => {
         try {
           console.log(
@@ -200,12 +181,14 @@ chrome.runtime.onMessage.addListener(
 
           const analysis =
             await sendImageForAnalysis(
-              message.screenshot
+              message.screenshot,
+              message.redactionRegions,
+              message.privacyProof
             );
 
           console.log(
-            "Sanitized screenshot analysis completed:",
-            analysis
+            "Sanitized screenshot analysis completed",
+            analysis?.detection_summary || {}
           );
 
           sendResponse({
@@ -232,6 +215,10 @@ chrome.runtime.onMessage.addListener(
       message.type ===
       "SEND_BROWSER_PERCEPTION"
     ) {
+      if (!sender.tab?.id || !message.perceptionState?.privacy?.sanitized) {
+        sendResponse({ success: false, error: "Privacy gate blocked unsanitized perception" });
+        return false;
+      }
       (async () => {
         try {
           console.log(

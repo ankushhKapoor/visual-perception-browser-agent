@@ -40,6 +40,14 @@ function getAccessibilityInfo(element) {
   return {
     role: element.getAttribute("role") || null,
     ariaLabel: element.getAttribute("aria-label") || null,
+    ariaLabelledBy: element.getAttribute("aria-labelledby") || null,
+    ariaDescribedBy: element.getAttribute("aria-describedby") || null,
+    ariaExpanded: element.getAttribute("aria-expanded") || null,
+    ariaHasPopup: element.getAttribute("aria-haspopup") || null,
+    ariaChecked: element.getAttribute("aria-checked") || null,
+    ariaSelected: element.getAttribute("aria-selected") || null,
+    tabIndex: element.tabIndex,
+    title: element.getAttribute("title") || null,
     accessibleName:
       element.getAttribute("aria-label") ||
       element.getAttribute("title") ||
@@ -124,6 +132,9 @@ function getDomElements() {
       name:
         element.getAttribute("name") ||
         null,
+      autocomplete:
+        element.getAttribute("autocomplete") ||
+        null,
       text: (
         element.innerText ||
         element.value ||
@@ -185,6 +196,10 @@ function getForms() {
               control.getAttribute(
                 "name"
               ) || null,
+            autocomplete:
+              control.getAttribute(
+                "autocomplete"
+              ) || null,
             text: (
               control.innerText ||
               control.value ||
@@ -223,39 +238,17 @@ function getForms() {
 }
 
 function getSensitiveInputElements() {
-  const sensitiveKeywords = [
-    "password",
-    "passcode",
-    "otp",
-    "verification",
-    "pin",
-    "cvv",
-    "cvc",
-    "card",
-    "credit",
-    "debit",
-    "bank",
-    "account",
-    "email",
-    "phone",
-    "mobile",
-    "tel",
-    "aadhaar",
-    "aadhar",
-    "pan",
-    "passport",
-    "token",
-    "secret",
-    "api"
-  ];
-
   return Array.from(
     document.querySelectorAll(
-      "input, textarea"
+      "input, textarea, select, [contenteditable='true']"
     )
   )
     .filter(isElementVisible)
     .filter((element) => {
+      if (!String(element.value || "").trim()) {
+        return false;
+      }
+
       const metadata = [
         element.type,
         element.name,
@@ -265,53 +258,129 @@ function getSensitiveInputElements() {
         element.getAttribute(
           "aria-label"
         ),
-        getLabelForElement(element)
+        element.getAttribute("aria-labelledby"),
+        element.getAttribute("role"),
+        getLabelForElement(element),
+        element.getAttribute("title")
       ]
         .filter(Boolean)
         .join(" ")
         .toLowerCase();
 
-      return (
-        element.type === "password" ||
-        sensitiveKeywords.some(
-          (keyword) =>
-            metadata.includes(keyword)
-        )
-      );
+      return Boolean(classifySensitiveText(metadata, element.value));
     })
-    .map((element) => ({
-      source:
-        "input",
-      tag:
-        element.tagName.toLowerCase(),
-      type:
-        element.type || null,
-      text:
-        "[REDACTED]",
-      rect:
-        getElementRect(element)
-    }));
+    .map((element) => {
+      const metadata = [
+        element.type, element.name, element.id, element.autocomplete,
+        element.placeholder, element.getAttribute("aria-label"),
+        getLabelForElement(element)
+      ].filter(Boolean).join(" ");
+      const detection = classifySensitiveText(metadata, element.value);
+      const rect = getElementRect(element);
+      const valueRect = getInputValueRect(element, rect);
+      return {
+        source: "input",
+        tag: element.tagName.toLowerCase(),
+        type: element.type || null,
+        category: detection?.category || "PII",
+        severity: detection?.severity || "HIGH",
+        reason: detection?.reason || "input metadata",
+        text: "[REDACTED]",
+        rect: valueRect
+      };
+    });
+}
+
+function getInputValueRect(element, inputRect) {
+  const style = window.getComputedStyle(element);
+  const value = String(element.value || "");
+  const renderedValue = element.type === "password"
+    ? "*".repeat(value.length)
+    : value;
+  const measurementCanvas = document.createElement("canvas");
+  const measurementContext = measurementCanvas.getContext("2d");
+  const font = [
+    style.fontStyle,
+    style.fontVariant,
+    style.fontWeight,
+    style.fontSize,
+    style.fontFamily
+  ].filter(Boolean).join(" ");
+
+  if (measurementContext) {
+    measurementContext.font = font;
+  }
+
+  const measuredWidth = measurementContext
+    ? measurementContext.measureText(renderedValue).width
+    : value.length * 8;
+  const paddingLeft = parseFloat(style.paddingLeft) || 0;
+  const paddingRight = parseFloat(style.paddingRight) || 0;
+  const textIndent = parseFloat(style.textIndent) || 0;
+  const availableWidth = Math.max(
+    1,
+    inputRect.width - paddingLeft - paddingRight - textIndent - 4
+  );
+  const valueWidth = Math.min(
+    availableWidth,
+    Math.max(8, Math.ceil(measuredWidth) + 4)
+  );
+  const lineHeight = parseFloat(style.lineHeight);
+  const fontSize = parseFloat(style.fontSize) || 16;
+  const valueHeight = Math.min(
+    inputRect.height - 2,
+    Math.max(10, Number.isFinite(lineHeight) ? lineHeight : fontSize * 1.25)
+  );
+
+  return {
+    x: Math.round(inputRect.x + paddingLeft + textIndent),
+    y: Math.round(inputRect.y + (inputRect.height - valueHeight) / 2),
+    width: Math.max(1, Math.round(valueWidth)),
+    height: Math.max(1, Math.round(valueHeight))
+  };
+}
+
+const PII_RULES = [
+  { category: "PASSWORD", severity: "CRITICAL", reason: "input metadata", keywords: ["password", "passcode", "passwd"] },
+  { category: "OTP", severity: "CRITICAL", reason: "input metadata or pattern", keywords: ["otp", "one time password", "verification code", "security code"] },
+  { category: "API_KEY", severity: "CRITICAL", reason: "key/token metadata or pattern", keywords: ["api key", "api token", "access key"] },
+  { category: "AUTH_TOKEN", severity: "CRITICAL", reason: "token metadata or pattern", keywords: ["auth token", "access token", "refresh token", "bearer", "jwt", "session token"] },
+  { category: "CARD_NUMBER", severity: "CRITICAL", reason: "card metadata or pattern", keywords: ["credit card", "debit card", "card number", "card no", "cvv", "cvc"] },
+  { category: "EMAIL", severity: "HIGH", reason: "email metadata or pattern", keywords: ["email", "e-mail"] },
+  { category: "PHONE", severity: "HIGH", reason: "phone metadata or pattern", keywords: ["phone", "mobile", "telephone", "tel"] },
+  { category: "GOVERNMENT_ID", severity: "HIGH", reason: "identity metadata or pattern", keywords: ["aadhaar", "aadhar", "pan number", "passport", "national id", "identity number"] },
+  { category: "BANK_ACCOUNT", severity: "HIGH", reason: "bank metadata or pattern", keywords: ["bank account", "account number", "ifsc"] },
+  { category: "EMPLOYEE_ID", severity: "MEDIUM", reason: "employee metadata", keywords: ["employee id", "employee number", "staff id", "worker id"] },
+  { category: "PERSON", severity: "HIGH", reason: "name metadata", keywords: ["full name", "first name", "last name", "person name"] },
+  { category: "ADDRESS", severity: "HIGH", reason: "address metadata", keywords: ["address", "street", "city", "postal code", "zip code"] }
+];
+
+function classifySensitiveText(metadata, value = "") {
+  const source = `${metadata || ""} ${value || ""}`.toLowerCase();
+  const patterns = [
+    ["EMAIL", /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i],
+    ["PHONE", /\b(?:\+?\d{1,3}[\s-]?)?[6-9]\d{9}\b/],
+    ["CARD_NUMBER", /\b(?:\d[ -]*?){13,19}\b/],
+    ["GOVERNMENT_ID", /\b\d{4}[ -]?\d{4}[ -]?\d{4}\b|\b[A-Z]{5}\d{4}[A-Z]\b/i],
+    ["AUTH_TOKEN", /\b(?:Bearer\s+)?[A-Za-z0-9_-]{24,}\.[A-Za-z0-9_.-]{10,}\b/],
+    ["API_KEY", /\b(?:sk|pk|api)[_-][A-Za-z0-9_-]{16,}\b/i]
+  ];
+  for (const [category, pattern] of patterns) {
+    if (pattern.test(String(value || metadata))) {
+      const rule = PII_RULES.find((item) => item.category === category);
+      return { category, severity: rule?.severity || "HIGH", reason: "validated pattern" };
+    }
+  }
+  for (const rule of PII_RULES) {
+    if (rule.keywords.some((keyword) => source.includes(keyword))) {
+      return { category: rule.category, severity: rule.severity, reason: rule.reason };
+    }
+  }
+  return null;
 }
 
 function containsPII(text) {
-  if (!text) {
-    return false;
-  }
-
-  const value = String(text);
-
-  const patterns = [
-    /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i,
-    /\b(?:\+91[\s-]?)?[6-9]\d{9}\b/,
-    /\b\d{4}[\s-]?\d{4}[\s-]?\d{4}\b/,
-    /\b[A-Z]{5}[0-9]{4}[A-Z]\b/i,
-    /\b(?:\d{4}[\s-]?){3}\d{4}\b/
-  ];
-
-  return patterns.some(
-    (pattern) =>
-      pattern.test(value)
-  );
+  return Boolean(classifySensitiveText("", text));
 }
 
 function sanitizeText(text) {
@@ -323,24 +392,93 @@ function sanitizeText(text) {
     String(text);
 
   const patterns = [
-    /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi,
-    /\b(?:\+91[\s-]?)?[6-9]\d{9}\b/g,
-    /\b\d{4}[\s-]?\d{4}[\s-]?\d{4}\b/g,
-    /\b[A-Z]{5}[0-9]{4}[A-Z]\b/gi,
-    /\b(?:\d{4}[\s-]?){3}\d{4}\b/g
+    ["PASSWORD", /\b(?:password|passcode|passwd)\s*[:=\-]?\s*[^\s,;]+/gi],
+    ["OTP", /\b(?:otp|verification code|security code)\s*[:=\-]?\s*[^\s,;]+/gi],
+    ["AUTH_TOKEN", /\b(?:bearer|auth token|access token|refresh token|jwt)\s*[:=\-]?\s*[^\s,;]+/gi],
+    ["EMPLOYEE_ID", /\b(?:employee id|employee number|staff id|worker id)\s*[:=\-]?\s*[^\s,;]+/gi],
+    ["EMAIL", /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi],
+    ["PHONE", /\b(?:\+?\d{1,3}[\s-]?)?[6-9]\d{9}\b/g],
+    ["CARD_NUMBER", /\b(?:\d[ -]*?){13,19}\b/g],
+    ["GOVERNMENT_ID", /\b\d{4}[\s-]?\d{4}[\s-]?\d{4}\b|\b[A-Z]{5}\d{4}[A-Z]\b/gi],
+    ["API_KEY", /\b(?:sk|pk|api)[_-][A-Za-z0-9_-]{16,}\b/gi]
   ];
-
-  patterns.forEach(
-    (pattern) => {
-      sanitizedText =
-        sanitizedText.replace(
-          pattern,
-          "[REDACTED]"
-        );
-    }
-  );
+  patterns.forEach(([category, pattern]) => {
+    sanitizedText = sanitizedText.replace(pattern, `<${category}_1>`);
+  });
 
   return sanitizedText;
+}
+
+function sanitizePageUrl(url) {
+  try {
+    const parsedUrl = new URL(url);
+    parsedUrl.username = "";
+    parsedUrl.password = "";
+    parsedUrl.search = "";
+    parsedUrl.hash = "";
+    return parsedUrl.toString();
+  } catch {
+    return "<URL_REDACTED>";
+  }
+}
+
+function getTextRedactionMatches(text) {
+  const patterns = [
+    ["EMAIL", /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi],
+    ["PHONE", /\b(?:\+?\d{1,3}[\s-]?)?[6-9]\d{9}\b/g],
+    ["GOVERNMENT_ID", /\b\d{4}[\s-]?\d{4}[\s-]?\d{4}\b|\b[A-Z]{5}\d{4}[A-Z]\b/gi],
+    ["CARD_NUMBER", /\b(?:\d[ -]*?){13,19}\b/g],
+    ["AUTH_TOKEN", /\b(?:Bearer\s+)?[A-Za-z0-9_-]{24,}\.[A-Za-z0-9_.-]{10,}\b/g],
+    ["API_KEY", /\b(?:sk|pk|api)[_-][A-Za-z0-9_-]{16,}\b/gi]
+  ];
+  const matches = [];
+
+  for (const [category, pattern] of patterns) {
+    let match;
+    while ((match = pattern.exec(text)) !== null) {
+      const detection = classifySensitiveText(category, match[0]);
+      if (detection) {
+        matches.push({
+          value: match[0],
+          category: detection.category,
+          severity: detection.severity,
+          start: match.index,
+          end: match.index + match[0].length
+        });
+      }
+      if (!pattern.global) {
+        break;
+      }
+    }
+  }
+
+  return matches;
+}
+
+function getTextRangeRect(textNode, start, end) {
+  if (!textNode || typeof document.createRange !== "function") {
+    return null;
+  }
+
+  const range = document.createRange();
+  range.setStart(textNode, start);
+  range.setEnd(textNode, end);
+  const rects = Array.from(range.getClientRects());
+  if (rects.length === 0) {
+    return null;
+  }
+
+  const left = Math.min(...rects.map((rect) => rect.left));
+  const top = Math.min(...rects.map((rect) => rect.top));
+  const right = Math.max(...rects.map((rect) => rect.right));
+  const bottom = Math.max(...rects.map((rect) => rect.bottom));
+
+  return {
+    x: Math.round(left),
+    y: Math.round(top),
+    width: Math.max(1, Math.round(right - left)),
+    height: Math.max(1, Math.round(bottom - top))
+  };
 }
 
 function getSensitiveTextElements() {
@@ -354,68 +492,38 @@ function getSensitiveTextElements() {
     "OPTION"
   ]);
 
-  return Array.from(
-    document.querySelectorAll(
-      "body *"
-    )
-  )
-    .filter((element) => {
-      if (
-        excludedTags.has(
-          element.tagName
-        )
-      ) {
-        return false;
+  const detections = [];
+  const walker = document.createTreeWalker(
+    document.body,
+    NodeFilter.SHOW_TEXT
+  );
+  let textNode;
+
+  while ((textNode = walker.nextNode())) {
+    const parent = textNode.parentElement;
+    if (!parent || excludedTags.has(parent.tagName) || !isElementVisible(parent)) {
+      continue;
+    }
+
+    const text = textNode.textContent || "";
+    for (const match of getTextRedactionMatches(text)) {
+      const rect = getTextRangeRect(textNode, match.start, match.end);
+      if (!rect) {
+        continue;
       }
+      detections.push({
+        source: "text",
+        tag: parent.tagName.toLowerCase(),
+        category: match.category,
+        severity: match.severity,
+        reason: "exact visible PII text match",
+        text: match.value,
+        rect
+      });
+    }
+  }
 
-      if (
-        !isElementVisible(element)
-      ) {
-        return false;
-      }
-
-      const directText =
-        Array.from(
-          element.childNodes
-        )
-          .filter(
-            (node) =>
-              node.nodeType ===
-              Node.TEXT_NODE
-          )
-          .map((node) =>
-            node.textContent.trim()
-          )
-          .filter(Boolean)
-          .join(" ");
-
-      return containsPII(
-        directText
-      );
-    })
-    .map((element) => ({
-      source:
-        "text",
-      tag:
-        element.tagName.toLowerCase(),
-      text:
-        Array.from(
-          element.childNodes
-        )
-          .filter(
-            (node) =>
-              node.nodeType ===
-              Node.TEXT_NODE
-          )
-          .map((node) =>
-            node.textContent.trim()
-          )
-          .filter(Boolean)
-          .join(" ")
-          .slice(0, 200),
-      rect:
-        getElementRect(element)
-    }));
+  return detections;
 }
 
 function getSensitiveElements() {
@@ -438,7 +546,17 @@ function extractPageContext() {
       width:
         window.innerWidth,
       height:
-        window.innerHeight
+        window.innerHeight,
+      devicePixelRatio:
+        window.devicePixelRatio,
+      scrollX:
+        window.scrollX,
+      scrollY:
+        window.scrollY,
+      screenWidth:
+        window.screen.width,
+      screenHeight:
+        window.screen.height
     },
     visibleText:
       getVisibleText(),
@@ -466,10 +584,35 @@ function extractPageContext() {
   };
 }
 
+function decideContextRoute(pageContext) {
+  const visualOnlyElements = document.querySelectorAll(
+    "canvas, svg, video, iframe, object, embed, img, [style*='background-image']"
+  );
+  const hasVisibleVisualContent = Array.from(visualOnlyElements)
+    .some(isElementVisible);
+
+  return pageContext.visibleText && !hasVisibleVisualContent
+    ? "DOM_ONLY"
+    : "DOM + SCREENSHOT";
+}
+
 function sanitizeDomElement(
   element,
   sensitiveElements
 ) {
+  const elementMetadata = [
+    element.type,
+    element.name,
+    element.id,
+    element.placeholder,
+    element.label,
+    element.accessibility?.ariaLabel,
+    element.accessibility?.accessibleName
+  ].filter(Boolean).join(" ");
+  const detection = classifySensitiveText(
+    elementMetadata,
+    element.text
+  );
   const isSensitive =
     sensitiveElements.some(
       (sensitiveElement) => {
@@ -496,6 +639,12 @@ function sanitizeDomElement(
             sensitiveRect.height -
               elementRect.height
           ) < 3
+          ) || (
+            sensitiveElement.source === "input" &&
+            sensitiveRect.x >= elementRect.x &&
+            sensitiveRect.y >= elementRect.y &&
+            sensitiveRect.x + sensitiveRect.width <= elementRect.x + elementRect.width &&
+            sensitiveRect.y + sensitiveRect.height <= elementRect.y + elementRect.height
         );
       }
     );
@@ -507,7 +656,7 @@ function sanitizeDomElement(
   sanitizedElement.text =
     isSensitive ||
     containsPII(element.text)
-      ? "[REDACTED]"
+      ? `<${detection?.category || "PII"}_1>`
       : sanitizeText(
           element.text
         );
@@ -516,7 +665,7 @@ function sanitizeDomElement(
     containsPII(
       element.placeholder
     )
-      ? "[REDACTED]"
+      ? `<${classifySensitiveText(elementMetadata, element.placeholder)?.category || "PII"}_1>`
       : sanitizeText(
           element.placeholder
         );
@@ -585,6 +734,10 @@ function sanitizeForms(
             (keyword) =>
               metadata.includes(keyword)
           );
+          const detection = classifySensitiveText(
+            metadata,
+            control.text
+          );
 
           return {
             ...control,
@@ -594,7 +747,7 @@ function sanitizeForms(
               containsPII(
                 control.text
               )
-                ? "[REDACTED]"
+                ? `<${detection?.category || "PII"}_1>`
                 : sanitizeText(
                     control.text
                   ),
@@ -642,9 +795,9 @@ function createSanitizedPayload(
   return {
     page: {
       url:
-        pageContext.url,
+        sanitizePageUrl(pageContext.url),
       title:
-        pageContext.title,
+        sanitizeText(pageContext.title),
       viewport:
         pageContext.viewport
     },
@@ -709,6 +862,65 @@ function createSanitizedPayload(
   };
 }
 
+const CRITICAL_REDACTION_CATEGORIES = new Set([
+  "PASSWORD",
+  "OTP",
+  "PIN",
+  "API_KEY",
+  "AUTH_TOKEN",
+  "CARD_NUMBER",
+  "CREDIT_CARD",
+  "BANK_ACCOUNT",
+  "GOVERNMENT_ID",
+  "AADHAAR",
+  "PAN",
+  "PASSPORT",
+  "CVV",
+  "SECRET_KEY"
+]);
+
+function getRedactionStrategy(category) {
+  return category === "FACE" ? "BLUR" : "BLACKOUT";
+}
+
+function createRedactionMap(sensitiveElements) {
+  return sensitiveElements
+    .filter((element) => element?.rect?.width > 0 && element?.rect?.height > 0)
+    .map((element) => ({
+      type: element.category || "PII",
+      category: element.category || "PII",
+      severity: element.severity || "HIGH",
+      source: [element.source || "DOM"],
+      boundingBox: element.rect,
+      strategy: getRedactionStrategy(element.category)
+    }));
+}
+
+function assertSanitizedScreenshot(dataUrl, redactionMap) {
+  if (
+    typeof dataUrl !== "string" ||
+    !dataUrl.startsWith("data:image/png") ||
+    !Array.isArray(redactionMap)
+  ) {
+    throw new Error("Privacy gate blocked an unverified screenshot");
+  }
+
+  for (const detection of redactionMap) {
+    const box = detection.boundingBox;
+    if (
+      !box ||
+      !Number.isFinite(box.x) ||
+      !Number.isFinite(box.y) ||
+      !Number.isFinite(box.width) ||
+      !Number.isFinite(box.height) ||
+      box.width <= 0 ||
+      box.height <= 0
+    ) {
+      throw new Error("Privacy gate blocked an invalid redaction map");
+    }
+  }
+}
+
 function redactScreenshot(
   dataUrl,
   sensitiveElements
@@ -747,6 +959,16 @@ function redactScreenshot(
           0
         );
 
+        const sourceCanvas =
+          document.createElement("canvas");
+        sourceCanvas.width = canvas.width;
+        sourceCanvas.height = canvas.height;
+        sourceCanvas.getContext("2d")?.drawImage(
+          image,
+          0,
+          0
+        );
+
         const scaleX =
           image.width /
           window.innerWidth;
@@ -755,28 +977,64 @@ function redactScreenshot(
           image.height /
           window.innerHeight;
 
-        context.fillStyle =
-          "black";
-
         sensitiveElements.forEach(
           (element) => {
             const rect =
               element.rect;
 
-            context.fillRect(
-              Math.round(
-                rect.x * scaleX
-              ),
-              Math.round(
-                rect.y * scaleY
-              ),
-              Math.round(
-                rect.width * scaleX
-              ),
-              Math.round(
-                rect.height * scaleY
-              )
+            if (!rect || rect.width <= 0 || rect.height <= 0) {
+              return;
+            }
+
+            const margin = Math.min(
+              8,
+              Math.max(2, Math.round(Math.min(rect.width, rect.height) * 0.08))
             );
+            const x1 = Math.max(0, Math.round((rect.x - margin) * scaleX));
+            const y1 = Math.max(0, Math.round((rect.y - margin) * scaleY));
+            const x2 = Math.min(
+              canvas.width,
+              Math.round((rect.x + rect.width + margin) * scaleX)
+            );
+            const y2 = Math.min(
+              canvas.height,
+              Math.round((rect.y + rect.height + margin) * scaleY)
+            );
+            const width = x2 - x1;
+            const height = y2 - y1;
+
+            if (width <= 0 || height <= 0) {
+              return;
+            }
+
+            if (getRedactionStrategy(element.category) === "BLACKOUT") {
+              context.fillStyle = "#000000";
+              context.fillRect(x1, y1, width, height);
+              return;
+            }
+
+            const blurredRegion = document.createElement("canvas");
+            blurredRegion.width = width;
+            blurredRegion.height = height;
+            const blurredContext = blurredRegion.getContext("2d");
+
+            if (!blurredContext) {
+              return;
+            }
+
+            blurredContext.filter = `blur(${Math.min(18, Math.max(4, Math.round(Math.max(width, height) * 0.08)))}px)`;
+            blurredContext.drawImage(
+              sourceCanvas,
+              x1,
+              y1,
+              width,
+              height,
+              0,
+              0,
+              width,
+              height
+            );
+            context.drawImage(blurredRegion, x1, y1);
           }
         );
 
@@ -801,17 +1059,24 @@ function redactScreenshot(
 }
 
 function sendSanitizedScreenshotForAnalysis(
-  sanitizedScreenshot
+  sanitizedScreenshot,
+  redactionRegions,
+  privacyProof
 ) {
   return new Promise(
     (resolve, reject) => {
-      chrome.runtime.sendMessage(
+      try {
+        chrome.runtime.sendMessage(
         {
           type:
             "SEND_SANITIZED_FOR_ANALYSIS",
 
           screenshot:
-            sanitizedScreenshot
+            sanitizedScreenshot,
+
+          redactionRegions,
+
+          privacyProof
         },
         (analysisResponse) => {
           if (
@@ -844,9 +1109,20 @@ function sendSanitizedScreenshotForAnalysis(
             analysisResponse.analysis
           );
         }
-      );
+        );
+      } catch (error) {
+        reject(new Error(getRuntimeErrorMessage(error)));
+      }
     }
   );
+}
+
+function getRuntimeErrorMessage(error) {
+  const message = error?.message || String(error);
+  if (message.toLowerCase().includes("extension context invalidated")) {
+    return "Extension was reloaded; refresh this page before capturing again";
+  }
+  return message;
 }
 
 function getAnalysisRect(item) {
@@ -1301,6 +1577,9 @@ function createFinalLocalPerceptionOutput(
     page:
       finalPayload.page,
 
+    contextRoute:
+      finalPayload.contextRoute,
+
     visualContext: {
       sanitizedScreenshot:
         finalPayload
@@ -1695,14 +1974,10 @@ function createBrowserPerceptionState(
   return {
     page: {
       url:
-        finalLocalPerceptionOutput
-          .page
-          .url,
+        sanitizePageUrl(finalLocalPerceptionOutput.page.url),
 
       title:
-        finalLocalPerceptionOutput
-          .page
-          .title,
+        sanitizeText(finalLocalPerceptionOutput.page.title),
 
       viewport:
         finalLocalPerceptionOutput
@@ -1717,6 +1992,7 @@ function createBrowserPerceptionState(
     objects,
 
     privacy: {
+      sanitized: true,
       piiDetected:
         finalLocalPerceptionOutput
           .privacy
@@ -1784,7 +2060,8 @@ function sendBrowserPerceptionState(
 ) {
   return new Promise(
     (resolve, reject) => {
-      chrome.runtime.sendMessage(
+      try {
+        chrome.runtime.sendMessage(
         {
           type:
             "SEND_BROWSER_PERCEPTION",
@@ -1823,23 +2100,37 @@ function sendBrowserPerceptionState(
             response.serverResponse
           );
         }
-      );
+        );
+      } catch (error) {
+        reject(new Error(getRuntimeErrorMessage(error)));
+      }
     }
   );
 }
 
 function captureScreenshot(
-  pageContext
+  pageContext,
+  contextRoute
 ) {
-  chrome.runtime.sendMessage(
-    {
-      type:
-        "CAPTURE_SCREENSHOT"
-    },
-    async (response) => {
+  if (isCaptureInProgress) {
+    console.warn("Capture already in progress");
+    return;
+  }
+
+  isCaptureInProgress = true;
+  console.log("Privacy pipeline started", { contextRoute });
+
+  try {
+    chrome.runtime.sendMessage(
+      {
+        type:
+          "CAPTURE_SCREENSHOT"
+      },
+      async (response) => {
       if (
         chrome.runtime.lastError
       ) {
+        isCaptureInProgress = false;
         console.error(
           "Could not communicate with background script:",
           chrome.runtime.lastError.message
@@ -1851,6 +2142,7 @@ function captureScreenshot(
       if (
         !response?.success
       ) {
+        isCaptureInProgress = false;
         console.error(
           "Screenshot capture failed:",
           response?.error
@@ -1869,6 +2161,14 @@ function captureScreenshot(
             response.screenshot,
             pageContext.sensitiveElements
           );
+
+        const redactionMap = createRedactionMap(
+          pageContext.sensitiveElements
+        );
+        assertSanitizedScreenshot(
+          sanitizedScreenshot,
+          redactionMap
+        );
 
         console.log(
           "Screenshot sanitized successfully"
@@ -1932,7 +2232,21 @@ function captureScreenshot(
 
         const analysis =
           await sendSanitizedScreenshotForAnalysis(
-            sanitizedScreenshot
+            sanitizedScreenshot,
+            redactionMap.map(
+              (element) => ({
+                ...element.boundingBox,
+                source: element.source[0].toLowerCase(),
+                category: element.category,
+                severity: element.severity,
+                strategy: element.strategy
+              })
+            ),
+            {
+              sanitized: true,
+              redactionMap,
+              rawScreenshotIncluded: false
+            }
           );
 
         console.log(
@@ -2015,6 +2329,15 @@ function captureScreenshot(
         );
 
         console.log(
+          "BROWSER PERCEPTION STATE JSON:\n" +
+          JSON.stringify(
+            browserPerceptionState,
+            null,
+            2
+          )
+        );
+
+        console.log(
           "Browser perception state summary:",
           browserPerceptionState.summary
         );
@@ -2045,6 +2368,22 @@ function captureScreenshot(
         );
 
         console.log(
+          "MEMBER 2 COMPLETE OUTPUT:",
+          {
+            route:
+              browserPerceptionState.contextRoute,
+            page:
+              browserPerceptionState.page,
+            summary:
+              browserPerceptionState.summary,
+            privacy:
+              browserPerceptionState.privacy,
+            artifacts:
+              analysis.artifacts || null
+          }
+        );
+
+        console.log(
           "Sanitized screenshot analysis completed successfully"
         );
       } catch (error) {
@@ -2052,56 +2391,102 @@ function captureScreenshot(
           "Local screenshot processing failed:",
           error.message
         );
+      } finally {
+        isCaptureInProgress = false;
+        if (captureRequested) {
+          requestAutomaticCapture("queued update");
+        }
+        }
       }
-    }
-  );
+    );
+  } catch (error) {
+    isCaptureInProgress = false;
+    console.warn("Privacy capture stopped:", getRuntimeErrorMessage(error));
+  }
 }
 
-const pageContext =
-  extractPageContext();
+let isCaptureInProgress = false;
+const AUTO_CAPTURE_ENABLED = true;
+let captureRequested = false;
+let captureTimer = null;
+
+function requestAutomaticCapture(reason) {
+  captureRequested = true;
+
+  if (captureTimer !== null) {
+    clearTimeout(captureTimer);
+  }
+
+  captureTimer = setTimeout(() => {
+    captureTimer = null;
+
+    if (isCaptureInProgress) {
+      return;
+    }
+
+    if (!captureRequested) {
+      return;
+    }
+
+    captureRequested = false;
+    const pageContext = extractPageContext();
+    const contextRoute = decideContextRoute(pageContext);
+    console.log("Privacy capture requested", { reason });
+    captureScreenshot(pageContext, contextRoute);
+  }, 250);
+}
 
 console.log(
-  "Page Context:"
+  "Visual Perception Agent loaded; waiting for an explicit extension click",
+  {
+    url: sanitizePageUrl(window.location.href),
+    viewport: {
+      width: window.innerWidth,
+      height: window.innerHeight,
+      devicePixelRatio: window.devicePixelRatio
+    }
+  }
 );
 
-console.log(
-  pageContext
-);
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type !== "START_ON_DEMAND_CAPTURE") {
+    return false;
+  }
 
-console.log(
-  "Page Context JSON:\n",
-  JSON.stringify(
-    pageContext,
-    null,
-    2
-  )
-);
+  console.log("On-demand capture request received");
 
-console.log(
-  "DOM Elements JSON:\n",
-  JSON.stringify(
-    pageContext.domElements,
-    null,
-    2
-  )
-);
+  if (isCaptureInProgress) {
+    sendResponse({ success: false, error: "Capture already in progress" });
+    return false;
+  }
 
-console.log(
-  "DOM elements extracted:",
-  pageContext.domElements.length
-);
+  requestAutomaticCapture("extension action");
+  sendResponse({ success: true, status: "capture started" });
+  return false;
+});
 
-console.log(
-  "Forms extracted:",
-  pageContext.forms.length
-);
+if (AUTO_CAPTURE_ENABLED) {
+  requestAutomaticCapture("page load");
+}
 
-console.log(
-  "Accessibility extracted for:",
-  pageContext.domElements.length,
-  "elements"
-);
+document.addEventListener("click", () => {
+  requestAutomaticCapture("click");
+}, true);
 
-captureScreenshot(
-  pageContext
-);
+document.addEventListener("input", () => {
+  requestAutomaticCapture("input");
+}, true);
+
+document.addEventListener("change", () => {
+  requestAutomaticCapture("change");
+}, true);
+
+const pageMutationObserver = new MutationObserver(() => {
+  requestAutomaticCapture("DOM mutation");
+});
+
+pageMutationObserver.observe(document.documentElement, {
+  subtree: true,
+  childList: true,
+  characterData: true
+});
