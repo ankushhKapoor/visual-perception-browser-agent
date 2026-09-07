@@ -1,11 +1,12 @@
 {
   "manifest_version": 3,
   "name": "Visual Perception Browser Agent",
-  "version": "0.1.0",
-  "description": "Privacy-preserving browser vision agent for SIH26171",
+  "version": "0.2.0",
+  "description": "Privacy-preserving visual browser agent powered by VLM (SIH26171)",
   "permissions": [
     "tabs",
-    "activeTab"
+    "activeTab",
+    "scripting"
   ],
   "host_permissions": [
     "<all_urls>",
@@ -23,11 +24,14 @@
         "file:///*"
       ],
       "js": [
+        "extensions/src/executor.js",
         "extensions/src/content.js"
-      ]
+      ],
+      "run_at": "document_idle"
     }
   ],
   "action": {
-    "default_title": "Visual Perception Agent"
+    "default_title": "Visual Perception Agent",
+    "default_popup": "extensions/public/popup.html"
   }
 }

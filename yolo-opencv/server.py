@@ -12,6 +12,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from combined_detect import analyze_image
 
+# Add backend/ to path so agent_router can be imported
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
+from agent_router import router as agent_router  # noqa: E402
+
 
 BASE_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = BASE_DIR.parent / "photos" / "output"
@@ -85,7 +89,7 @@ def apply_redaction_regions(image_path, regions):
 
 app = FastAPI(
     title="Visual Perception Browser Agent API",
-    version="0.1.0"
+    version="0.2.0"
 )
 
 app.add_middleware(
@@ -95,6 +99,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"]
 )
+
+# Mount the agent router — provides /agent/task and /agent/status
+app.include_router(agent_router)
 
 
 @app.get("/")

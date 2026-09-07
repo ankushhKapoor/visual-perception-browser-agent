@@ -3,8 +3,9 @@ console.log(
   chrome.runtime.id
 );
 
-const ANALYSIS_API_URL = "http://127.0.0.1:8000/analyze";
+const ANALYSIS_API_URL   = "http://127.0.0.1:8000/analyze";
 const PERCEPTION_API_URL = "http://127.0.0.1:8000/perception";
+const AGENT_TASK_API_URL = "http://127.0.0.1:8000/agent/task";
 const captureInProgressTabs = new Set();
 
 chrome.action.onClicked.addListener((tab) => {
@@ -249,6 +250,42 @@ chrome.runtime.onMessage.addListener(
             success: false,
             error: error.message
           });
+        }
+      })();
+
+      return true;
+    }
+
+    if (message.type === "SEND_AGENT_TASK") {
+      if (
+        !sender.tab?.id ||
+        !message.agentPayload?.privacy_proof?.sanitized ||
+        message.agentPayload?.privacy_proof?.rawScreenshotIncluded
+      ) {
+        sendResponse({ success: false, error: "Privacy gate blocked agent task" });
+        return false;
+      }
+
+      (async () => {
+        try {
+          console.log("Sending agent task to local backend...");
+          const apiResponse = await fetch(AGENT_TASK_API_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(message.agentPayload)
+          });
+
+          if (!apiResponse.ok) {
+            const errText = await apiResponse.text();
+            throw new Error(`Agent API error: ${apiResponse.status} ${errText}`);
+          }
+
+          const result = await apiResponse.json();
+          console.log("Agent task result:", result);
+          sendResponse({ success: true, tasks: result.tasks, model: result.model });
+        } catch (err) {
+          console.error("Agent task failed:", err);
+          sendResponse({ success: false, error: err.message });
         }
       })();
 

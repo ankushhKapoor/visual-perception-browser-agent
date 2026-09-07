@@ -2490,3 +2490,117 @@ pageMutationObserver.observe(document.documentElement, {
   childList: true,
   characterData: true
 });
+
+/* ============================================================
+   Agent task handler
+   Triggered by the popup via AGENT_TASK_REQUEST message.
+   Captures perception state + screenshot, posts to /agent/task.
+   ============================================================ */
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === "AGENT_TASK_REQUEST") {
+    const taskIntent = message.taskIntent || "";
+
+    (async () => {
+      try {
+        const pageContext = extractPageContext();
+
+        // Capture + sanitize screenshot
+        const screenshotResponse = await new Promise((resolve, reject) => {
+          chrome.runtime.sendMessage({ type: "CAPTURE_SCREENSHOT" }, (res) => {
+            if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+            resolve(res);
+          });
+        });
+
+        if (!screenshotResponse?.success) {
+          throw new Error(screenshotResponse?.error || "Screenshot capture failed");
+        }
+
+        const sanitizedScreenshot = await redactScreenshot(
+          screenshotResponse.screenshot,
+          pageContext.sensitiveElements
+        );
+
+        const redactionMap = createRedactionMap(pageContext.sensitiveElements);
+        assertSanitizedScreenshot(sanitizedScreenshot, redactionMap);
+
+        const finalPayload = createSanitizedPayload(pageContext, sanitizedScreenshot);
+        const browserPerceptionState = createBrowserPerceptionState(
+          createFinalLocalPerceptionOutput(finalPayload, { texts: [], regions: [], objects: [], detection_summary: {}, image: {} })
+        );
+
+        // Strip "data:image/png;base64," prefix for transport
+        const image_b64 = sanitizedScreenshot.replace(/^data:image\/\w+;base64,/, "");
+
+        const agentPayload = {
+          task_intent: taskIntent,
+          perception_state: browserPerceptionState,
+          image_b64,
+          redaction_regions: redactionMap.map((r) => ({
+            rect: r.boundingBox,
+            strategy: r.strategy,
+            category: r.category,
+          })),
+          privacy_proof: {
+            sanitized: true,
+            rawScreenshotIncluded: false,
+            redactionMap,
+          },
+        };
+
+        const agentResponse = await new Promise((resolve, reject) => {
+          chrome.runtime.sendMessage(
+            { type: "SEND_AGENT_TASK", agentPayload },
+            (res) => {
+              if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+              resolve(res);
+            }
+          );
+        });
+
+        if (!agentResponse?.success) {
+          throw new Error(agentResponse?.error || "Agent task API failed");
+        }
+
+        sendResponse({ success: true, tasks: agentResponse.tasks, model: agentResponse.model });
+      } catch (err) {
+        console.error("[Agent] Task request failed:", err.message);
+        sendResponse({ success: false, error: getRuntimeErrorMessage(err) });
+      }
+    })();
+
+    return true; // keep message channel open for async response
+  }
+
+  if (message.type === "EXECUTE_TASKS") {
+    const tasks = message.tasks;
+
+    (async () => {
+      try {
+        console.log("[Agent] Executing tasks:", tasks?.taskId);
+
+        const result = await executeTasks(tasks, (step, totalSteps, status, error) => {
+          const stepData = tasks?.tasks?.[step - 1];
+          // Broadcast progress to popup (popup listens via onMessage)
+          chrome.runtime.sendMessage({
+            type: "TASK_PROGRESS",
+            step,
+            totalSteps,
+            status,
+            description: stepData?.description || "",
+            error: error || null,
+          }).catch(() => {}); // popup may have closed
+        });
+
+        sendResponse(result);
+      } catch (err) {
+        sendResponse({ success: false, completedSteps: 0, error: err.message });
+      }
+    })();
+
+    return true;
+  }
+
+  return false;
+});
