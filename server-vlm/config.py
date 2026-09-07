@@ -13,7 +13,7 @@ class VLMConfig:
     vllm_base_url: str = os.getenv("VLLM_BASE_URL", "http://localhost:9000/v1")
 
     # Model name as registered in vLLM
-    model_name: str = os.getenv("MODEL_NAME", "Qwen/Qwen2-VL-7B-Instruct")
+    model_name: str = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-VL-3B-Instruct")
 
     # Max tokens in VLM response
     max_response_tokens: int = int(os.getenv("MAX_RESPONSE_TOKENS", "2048"))

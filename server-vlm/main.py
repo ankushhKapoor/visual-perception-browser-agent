@@ -1,5 +1,5 @@
 """
-FastAPI wrapper server for the college-side VLM (Qwen2-VL-7B via vLLM).
+FastAPI wrapper server for the college-side VLM (Qwen2.5-VL-3B via vLLM).
 
 Run this on the college machine AFTER vLLM is serving:
     uvicorn main:app --host 0.0.0.0 --port 9001
@@ -122,7 +122,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Visual Browser Agent — VLM Server",
     version="0.2.0",
-    description="Qwen2-VL-7B endpoint for the visual browser agent",
+    description="Qwen2.5-VL-3B-Instruct endpoint for the visual browser agent",
     lifespan=lifespan,
 )
 

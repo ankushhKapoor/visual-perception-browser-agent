@@ -1,26 +1,33 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Visual Perception Agent</title>
   <style>
     /* ─── Reset & base ─── */
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
 
     :root {
-      --bg:        #0d1117;
-      --surface:   #161b22;
-      --border:    #30363d;
-      --accent:    #7c3aed;
+      --bg: #0d1117;
+      --surface: #161b22;
+      --border: #30363d;
+      --accent: #7c3aed;
       --accent-lo: #4c1d95;
       --accent-hi: #a78bfa;
-      --green:     #22c55e;
-      --red:       #f87171;
-      --yellow:    #fbbf24;
-      --text:      #e6edf3;
-      --muted:     #8b949e;
-      --radius:    10px;
+      --green: #22c55e;
+      --red: #f87171;
+      --yellow: #fbbf24;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --radius: 10px;
     }
 
     body {
@@ -41,6 +48,7 @@
       padding: 14px 16px 10px;
       border-bottom: 1px solid var(--border);
     }
+
     .logo {
       width: 26px;
       height: 26px;
@@ -51,11 +59,13 @@
       justify-content: center;
       font-size: 14px;
     }
+
     .header-title {
       font-weight: 600;
       font-size: 13.5px;
       letter-spacing: -0.01em;
     }
+
     .header-badge {
       margin-left: auto;
       font-size: 10px;
@@ -67,7 +77,9 @@
     }
 
     /* ─── Main content ─── */
-    .main { padding: 14px 16px; }
+    .main {
+      padding: 14px 16px;
+    }
 
     /* Intent area */
     .label {
@@ -78,6 +90,7 @@
       color: var(--muted);
       margin-bottom: 6px;
     }
+
     .intent-textarea {
       width: 100%;
       min-height: 72px;
@@ -92,10 +105,14 @@
       outline: none;
       transition: border-color 0.15s;
     }
+
     .intent-textarea:focus {
       border-color: var(--accent);
     }
-    .intent-textarea::placeholder { color: var(--muted); }
+
+    .intent-textarea::placeholder {
+      color: var(--muted);
+    }
 
     /* Run button */
     .run-btn {
@@ -116,21 +133,43 @@
       transition: opacity 0.15s, transform 0.1s;
       letter-spacing: 0.02em;
     }
-    .run-btn:hover:not(:disabled) { opacity: 0.9; }
-    .run-btn:active:not(:disabled) { transform: scale(0.98); }
-    .run-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    .run-btn:hover:not(:disabled) {
+      opacity: 0.9;
+    }
+
+    .run-btn:active:not(:disabled) {
+      transform: scale(0.98);
+    }
+
+    .run-btn:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
     .run-btn .spinner {
-      width: 14px; height: 14px;
-      border: 2px solid rgba(255,255,255,0.3);
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(255, 255, 255, 0.3);
       border-top-color: #fff;
       border-radius: 50%;
       animation: spin 0.7s linear infinite;
       display: none;
     }
-    .run-btn.loading .spinner { display: block; }
-    .run-btn.loading .btn-label { display: none; }
 
-    @keyframes spin { to { transform: rotate(360deg); } }
+    .run-btn.loading .spinner {
+      display: block;
+    }
+
+    .run-btn.loading .btn-label {
+      display: none;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
 
     /* ─── Status / progress ─── */
     .status-box {
@@ -141,7 +180,10 @@
       overflow: hidden;
       display: none;
     }
-    .status-box.visible { display: block; }
+
+    .status-box.visible {
+      display: block;
+    }
 
     .status-header {
       display: flex;
@@ -152,22 +194,46 @@
       font-size: 11.5px;
       font-weight: 600;
     }
+
     .status-dot {
-      width: 7px; height: 7px;
+      width: 7px;
+      height: 7px;
       border-radius: 50%;
       background: var(--muted);
       flex-shrink: 0;
     }
-    .status-dot.running { background: var(--yellow); animation: pulse 1s ease-in-out infinite; }
-    .status-dot.success { background: var(--green); }
-    .status-dot.error   { background: var(--red); }
-    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+    .status-dot.running {
+      background: var(--yellow);
+      animation: pulse 1s ease-in-out infinite;
+    }
+
+    .status-dot.success {
+      background: var(--green);
+    }
+
+    .status-dot.error {
+      background: var(--red);
+    }
+
+    @keyframes pulse {
+
+      0%,
+      100% {
+        opacity: 1
+      }
+
+      50% {
+        opacity: 0.4
+      }
+    }
 
     .step-list {
       padding: 8px 12px;
       max-height: 160px;
       overflow-y: auto;
     }
+
     .step-item {
       display: flex;
       align-items: flex-start;
@@ -175,11 +241,29 @@
       padding: 4px 0;
       font-size: 11.5px;
     }
-    .step-icon { flex-shrink: 0; font-size: 12px; margin-top: 1px; }
-    .step-text { color: var(--muted); }
-    .step-text.active { color: var(--text); font-weight: 500; }
-    .step-text.done   { color: var(--green); }
-    .step-text.error  { color: var(--red); }
+
+    .step-icon {
+      flex-shrink: 0;
+      font-size: 12px;
+      margin-top: 1px;
+    }
+
+    .step-text {
+      color: var(--muted);
+    }
+
+    .step-text.active {
+      color: var(--text);
+      font-weight: 500;
+    }
+
+    .step-text.done {
+      color: var(--green);
+    }
+
+    .step-text.error {
+      color: var(--red);
+    }
 
     /* Progress bar */
     .progress-bar-wrap {
@@ -189,6 +273,7 @@
       border-radius: 99px;
       overflow: hidden;
     }
+
     .progress-bar {
       height: 100%;
       background: linear-gradient(90deg, var(--accent), var(--accent-hi));
@@ -200,25 +285,35 @@
     /* Confirmation panel */
     .confirm-box {
       margin-top: 12px;
-      background: rgba(251,191,36,0.08);
-      border: 1px solid rgba(251,191,36,0.3);
+      background: rgba(251, 191, 36, 0.08);
+      border: 1px solid rgba(251, 191, 36, 0.3);
       border-radius: var(--radius);
       padding: 10px 12px;
       display: none;
     }
-    .confirm-box.visible { display: block; }
+
+    .confirm-box.visible {
+      display: block;
+    }
+
     .confirm-title {
       font-size: 11.5px;
       font-weight: 600;
       color: var(--yellow);
       margin-bottom: 4px;
     }
+
     .confirm-reason {
       font-size: 11px;
       color: var(--muted);
       margin-bottom: 10px;
     }
-    .confirm-actions { display: flex; gap: 8px; }
+
+    .confirm-actions {
+      display: flex;
+      gap: 8px;
+    }
+
     .confirm-btn {
       flex: 1;
       padding: 7px 0;
@@ -229,22 +324,36 @@
       cursor: pointer;
       transition: opacity 0.15s;
     }
-    .confirm-btn:hover { opacity: 0.85; }
-    .confirm-proceed { background: var(--green); color: #000; }
-    .confirm-cancel  { background: var(--border); color: var(--text); }
+
+    .confirm-btn:hover {
+      opacity: 0.85;
+    }
+
+    .confirm-proceed {
+      background: var(--green);
+      color: #000;
+    }
+
+    .confirm-cancel {
+      background: var(--border);
+      color: var(--text);
+    }
 
     /* Error message */
     .error-msg {
       margin-top: 10px;
       padding: 8px 12px;
-      background: rgba(248,113,113,0.08);
-      border: 1px solid rgba(248,113,113,0.25);
+      background: rgba(248, 113, 113, 0.08);
+      border: 1px solid rgba(248, 113, 113, 0.25);
       border-radius: var(--radius);
       font-size: 11.5px;
       color: var(--red);
       display: none;
     }
-    .error-msg.visible { display: block; }
+
+    .error-msg.visible {
+      display: block;
+    }
 
     /* ─── Footer ─── */
     .footer {
@@ -256,6 +365,7 @@
       font-size: 10.5px;
       color: var(--muted);
     }
+
     .model-chip {
       padding: 2px 7px;
       background: var(--surface);
@@ -265,6 +375,7 @@
     }
   </style>
 </head>
+
 <body>
   <!-- Header -->
   <div class="header">
@@ -276,12 +387,8 @@
   <!-- Main -->
   <div class="main">
     <div class="label">What do you want to do?</div>
-    <textarea
-      id="intentInput"
-      class="intent-textarea"
-      placeholder="e.g. Search for flights to Goa next Friday…"
-      rows="3"
-    ></textarea>
+    <textarea id="intentInput" class="intent-textarea" placeholder="e.g. Search for flights to Goa next Friday…"
+      rows="3"></textarea>
 
     <button id="runBtn" class="run-btn">
       <div class="spinner"></div>
@@ -294,7 +401,7 @@
       <div id="confirmReason" class="confirm-reason"></div>
       <div class="confirm-actions">
         <button id="confirmProceed" class="confirm-btn confirm-proceed">Proceed</button>
-        <button id="confirmCancel"  class="confirm-btn confirm-cancel">Cancel</button>
+        <button id="confirmCancel" class="confirm-btn confirm-cancel">Cancel</button>
       </div>
     </div>
 
@@ -317,9 +424,10 @@
   <!-- Footer -->
   <div class="footer">
     <span id="footerStatus">Privacy-preserving · local processing</span>
-    <span class="model-chip" id="modelChip">Qwen2-VL-7B</span>
+    <span class="model-chip" id="modelChip">Qwen2.5-VL-3B</span>
   </div>
 
   <script src="popup.js"></script>
 </body>
+
 </html>
