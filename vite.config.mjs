@@ -7,7 +7,10 @@ export default defineConfig({
     crx({
       manifest,
       contentScripts: {
-        standaloneFiles: ["extensions/src/content.js"]
+        standaloneFiles: [
+          "extensions/src/content.js",
+          "extensions/src/chatbot.js"
+        ]
       }
     })
   ]

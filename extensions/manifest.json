@@ -24,6 +24,7 @@
         "file:///*"
       ],
       "js": [
+        "extensions/src/chatbot.js",
         "extensions/src/executor.js",
         "extensions/src/content.js"
       ],

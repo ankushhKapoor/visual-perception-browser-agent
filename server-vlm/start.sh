@@ -6,7 +6,7 @@
 
 set -euo pipefail
 
-MODEL="${MODEL_NAME:-Qwen/Qwen2-VL-7B-Instruct}"
+MODEL="${MODEL_NAME:-Qwen/Qwen2.5-VL-3B-Instruct}"
 VLLM_PORT="${VLLM_PORT:-9000}"
 SERVER_PORT="${VLM_SERVER_PORT:-9001}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-8192}"

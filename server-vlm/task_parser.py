@@ -140,6 +140,11 @@ def parse_vlm_output(
     """
     Parse and validate the VLM's raw text output into a structured tasks dict.
 
+    Supports three response types:
+      - type "answer"  → answer field with text, tasks may be []
+      - type "tasks"   → tasks array with steps
+      - type "mixed"   → both answer and tasks
+
     Args:
         raw_text: The raw string returned by the VLM.
         original_intent: The user's task intent string (echoed in the output).
@@ -164,20 +169,31 @@ def parse_vlm_output(
             f"VLM output root must be a JSON object, got {type(data).__name__}"
         )
 
-    raw_tasks = data.get("tasks")
-    if not isinstance(raw_tasks, list):
-        raise TaskParseError("VLM output missing 'tasks' array")
+    response_type = data.get("type", "tasks")
+    raw_tasks = data.get("tasks") or []
 
-    if len(raw_tasks) == 0:
-        raise TaskParseError("VLM returned an empty 'tasks' array")
+    if not isinstance(raw_tasks, list):
+        raise TaskParseError("VLM output 'tasks' field must be a list")
+
+    # For answer-type responses, tasks may be empty — that's valid
+    is_answer_only = response_type == "answer" or (
+        not raw_tasks and data.get("answer")
+    )
+
+    if not is_answer_only and len(raw_tasks) == 0:
+        raise TaskParseError(
+            "VLM returned an empty 'tasks' array for a non-answer response"
+        )
 
     validated_tasks = [_validate_task(t, i) for i, t in enumerate(raw_tasks)]
 
     return {
-        "taskId": data.get("taskId") or str(uuid.uuid4())[:8],
-        "intent": data.get("intent") or original_intent,
+        "taskId":   data.get("taskId") or str(uuid.uuid4())[:8],
+        "intent":   data.get("intent") or original_intent,
+        "type":     response_type,
+        "answer":   str(data.get("answer") or ""),
         "requires_confirmation": bool(data.get("requires_confirmation", False)),
         "reasoning": str(data.get("reasoning", "")),
-        "tasks": validated_tasks,
-        "status": "pending",
+        "tasks":    validated_tasks,
+        "status":   "pending",
     }
