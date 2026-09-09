@@ -36,5 +36,8 @@
   "action": {
     "default_title": "Visual Perception Agent",
     "default_popup": "extensions/public/popup.html"
+  },
+  "chrome_url_overrides": {
+    "newtab": "extensions/public/home.html"
   }
 }

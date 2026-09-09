@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Visual Agent Home</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: #090d13; color: #e6edf3; font: 14px/1.5 system-ui, sans-serif; }
+    main { width: min(760px, calc(100% - 32px)); margin: 0 auto; padding: 48px 0; }
+    h1 { margin: 0; font-size: 24px; }
+    p { color: #8b949e; margin: 7px 0 24px; }
+    #history { display: flex; flex-direction: column; gap: 12px; }
+    .message { max-width: 88%; padding: 11px 13px; border-radius: 12px; white-space: pre-wrap; word-break: break-word; }
+    .user { align-self: flex-end; background: linear-gradient(135deg, #7c3aed, #2563eb); }
+    .agent { align-self: flex-start; background: #161b22; border: 1px solid #30363d; }
+    .empty { border: 1px dashed #30363d; padding: 22px; border-radius: 12px; color: #8b949e; }
+    .note { margin-top: 28px; padding: 12px; border: 1px solid rgba(124,58,237,.35); border-radius: 10px; background: rgba(124,58,237,.08); color: #c4b5fd; }
+    .agent .vsrc-preview { display: none; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Visual Agent</h1>
+    <p>Browser-wide conversation history. Each task uses only the sanitized context of the page where it runs.</p>
+    <section id="history" aria-live="polite"></section>
+    <div class="note">Open any website and use the Visual Agent panel to run a task. Messages will appear here and across all browser tabs.</div>
+  </main>
+  <script src="home.js"></script>
+</body>
+</html>

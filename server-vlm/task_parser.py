@@ -31,6 +31,7 @@ VALID_ACTIONS = {
 
 VALID_WAIT_CONDITIONS = {"navigation", "selector", "timeout"}
 VALID_SCROLL_DIRECTIONS = {"up", "down", "left", "right"}
+VALID_RESPONSE_TYPES = {"answer", "tasks", "mixed"}
 
 
 class TaskParseError(ValueError):
@@ -186,17 +187,29 @@ def parse_vlm_output(
         )
 
     response_type = data.get("type", "tasks")
+    if response_type not in VALID_RESPONSE_TYPES:
+        raise TaskParseError(
+            f"VLM output 'type' must be one of {sorted(VALID_RESPONSE_TYPES)}"
+        )
     raw_tasks = data.get("tasks") or []
+    answer = str(data.get("answer") or "").strip()
+    requires_screenshot = bool(data.get("requires_screenshot", False))
 
     if not isinstance(raw_tasks, list):
         raise TaskParseError("VLM output 'tasks' field must be a list")
 
-    # For answer-type responses, tasks may be empty — that's valid
-    is_answer_only = response_type == "answer" or (
-        not raw_tasks and data.get("answer")
-    )
-
-    if not is_answer_only and len(raw_tasks) == 0:
+    if requires_screenshot:
+        if raw_tasks:
+            raise TaskParseError("A screenshot request must have an empty 'tasks' array")
+    elif response_type == "answer":
+        if not answer:
+            raise TaskParseError("Answer response must contain a non-empty 'answer'")
+        if raw_tasks:
+            raise TaskParseError("Answer response must have an empty 'tasks' array")
+    elif response_type == "mixed":
+        if not answer or not raw_tasks:
+            raise TaskParseError("Mixed response requires both a non-empty answer and tasks")
+    elif len(raw_tasks) == 0:
         raise TaskParseError(
             "VLM returned an empty 'tasks' array for a non-answer response"
         )
@@ -207,8 +220,9 @@ def parse_vlm_output(
         "taskId":   data.get("taskId") or str(uuid.uuid4())[:8],
         "intent":   data.get("intent") or original_intent,
         "type":     response_type,
-        "answer":   str(data.get("answer") or ""),
+        "answer":   answer,
         "requires_confirmation": bool(data.get("requires_confirmation", False)),
+        "requires_screenshot": requires_screenshot,
         "reasoning": str(data.get("reasoning", "")),
         "tasks":    validated_tasks,
         "status":   "pending",

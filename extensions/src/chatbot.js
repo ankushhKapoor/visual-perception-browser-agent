@@ -2,7 +2,7 @@
  * chatbot.js v2 — Visual Perception Agent Side Panel
  *
  * Improvements over v1:
- *  1. Chat history persists across same-tab page navigations (chrome.storage.session)
+ *  1. Browser-wide history persists across tabs, reloads, and restarts (chrome.storage.local)
  *  2. Smart image sending — questions use text-only first; image only if model signals it needs one
  *  3. Source transparency — collapsible "📎 Source" pill shows what was fed to the VLM
  *  4. Reliable element resolution — _elMap stores live DOM refs during capture (fixes silent no-ops)
@@ -23,7 +23,12 @@
   const MAX_ELEMS = 60;
   const MAX_TEXT  = 3000;
   const MAX_HIST  = 60;
-  const histKey   = (id) => `vpba_hist_${id}`;
+  const BROWSER_HISTORY_KEY = "vpba_browser_history_v1";
+  // Both the conversation and panel visibility are browser-wide. A tab-scoped
+  // panel flag was unreliable during document replacement because a content
+  // script can be destroyed before its session write is observed.
+  const BROWSER_PANEL_OPEN_KEY = "vpba_browser_panel_open_v1";
+  const NAVIGATION_STATE_PREFIX = "vpba_navigation_resume_";
 
   const PII_RE = [
     /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi,
@@ -36,8 +41,8 @@
   let panelOpen    = false;
   let processing   = false;
   let pendingTasks = null;   // eslint-disable-line no-unused-vars
-  let myTabId      = null;
   let chatHistory  = [];     // [{ role:"user"|"agent", text?:"", html?:"" }]
+  let myTabId = null;
 
   /**
    * Live element reference map — populated during each getPageContext() call.
@@ -358,8 +363,11 @@
   const statusD= document.getElementById("vpba-hdr-status");
 
   // ── Panel toggle ────────────────────────────────────────────────────────────
-  function openPanel()  { panelOpen = true;  panel.classList.add("open");    tab.classList.add("shifted"); inp.focus(); }
-  function closePanel() { panelOpen = false; panel.classList.remove("open"); tab.classList.remove("shifted"); }
+  function savePanelState(open) {
+    chrome.storage.local.set({ [BROWSER_PANEL_OPEN_KEY]: Boolean(open) });
+  }
+  function openPanel()  { panelOpen = true;  panel.classList.add("open");    tab.classList.add("shifted"); savePanelState(true); inp.focus(); }
+  function closePanel() { panelOpen = false; panel.classList.remove("open"); tab.classList.remove("shifted"); savePanelState(false); }
   tab.addEventListener("click",   () => panelOpen ? closePanel() : openPanel());
   closeB.addEventListener("click", closePanel);
 
@@ -376,26 +384,32 @@
   function scrollBot() { msgs.scrollTop = msgs.scrollHeight; }
   function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-  // ── Tab ID ──────────────────────────────────────────────────────────────────
-  async function getMyTabId() {
+  function getMyTabId() {
     return new Promise(resolve => {
       try {
-        chrome.runtime.sendMessage({ type: "GET_TAB_ID" }, res => {
-          if (chrome.runtime.lastError || !res?.tabId) return resolve(null);
-          resolve(res.tabId);
+        chrome.runtime.sendMessage({ type: "GET_TAB_ID" }, response => {
+          resolve(chrome.runtime.lastError ? null : response?.tabId ?? null);
         });
-      } catch { resolve(null); }
+      } catch (_) { resolve(null); }
     });
+  }
+  function sessionGet(key) {
+    return new Promise(resolve => chrome.storage.session.get(key, value => resolve(value?.[key])));
+  }
+  function sessionSet(key, value) {
+    return new Promise(resolve => chrome.storage.session.set({ [key]: value }, resolve));
+  }
+  function sessionRemove(key) {
+    return new Promise(resolve => chrome.storage.session.remove(key, resolve));
   }
 
   // ── History storage ──────────────────────────────────────────────────────────
   async function loadHistory() {
-    if (!myTabId) return false;
     return new Promise(resolve => {
       try {
-        chrome.storage.session.get(histKey(myTabId), result => {
+        chrome.storage.local.get(BROWSER_HISTORY_KEY, result => {
           if (chrome.runtime.lastError) return resolve(false);
-          const hist = result[histKey(myTabId)];
+          const hist = result[BROWSER_HISTORY_KEY];
           if (!hist || !hist.length) return resolve(false);
           chatHistory = hist;
           hist.forEach(m => {
@@ -409,12 +423,29 @@
   }
 
   function persistHistory() {
-    if (!myTabId) return;
     try {
       const trimmed = chatHistory.slice(-MAX_HIST);
-      chrome.storage.session.set({ [histKey(myTabId)]: trimmed });
+      chrome.storage.local.set({ [BROWSER_HISTORY_KEY]: trimmed });
     } catch (_) {}
   }
+
+  function renderHistory() {
+    msgs.innerHTML = "";
+    chatHistory.forEach(m => {
+      if (m.role === "user") _renderUserBubble(m.text);
+      else if (m.role === "agent") _renderAgentBubble(m.html);
+    });
+  }
+
+  // A completed conversation message saved in one tab appears in all pages.
+  // Keep a live request untouched in its owning tab until it completes.
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "local" || !changes[BROWSER_HISTORY_KEY] || processing) return;
+    const next = changes[BROWSER_HISTORY_KEY].newValue;
+    if (!Array.isArray(next)) return;
+    chatHistory = next;
+    renderHistory();
+  });
 
   // ── Low-level bubble renderers (no history side effects) ────────────────────
   function _renderUserBubble(text) {
@@ -461,6 +492,7 @@
     el.appendChild(ts);
     msgs.appendChild(el);
     scrollBot();
+    let savedIndex = null;
     return {
       el, bubble, ts,
       set(html)    { bubble.innerHTML = html; ts.textContent = now(); scrollBot(); },
@@ -468,7 +500,13 @@
       save()       {
         const saved = bubble.cloneNode(true);
         saved.querySelectorAll(".vsrc-preview").forEach(node => node.remove());
-        chatHistory.push({ role: "agent", html: saved.innerHTML });
+        const entry = { role: "agent", html: saved.innerHTML };
+        if (savedIndex == null) {
+          savedIndex = chatHistory.length;
+          chatHistory.push(entry);
+        } else {
+          chatHistory[savedIndex] = entry;
+        }
         persistHistory();
       },
     };
@@ -1200,7 +1238,8 @@
     const steps = tasksJson?.tasks || [];
     if (!steps.length) return { success: true, completedSteps: 0 };
     let done = 0;
-    for (const step of steps) {
+    for (let index = 0; index < steps.length; index++) {
+      const step = steps[index];
       onProg(step.step, steps.length, "running");
       const fn = ACTION[step.action];
       if (!fn) {
@@ -1208,6 +1247,17 @@
         return { success: false, error: `Unknown action: ${step.action}` };
       }
       try {
+        // A document navigation removes this content script. Persist the rest
+        // before leaving; the script on the destination page resumes it.
+        if (step.action === "navigate") {
+          if (myTabId != null && index + 1 < steps.length) {
+            await sessionSet(`${NAVIGATION_STATE_PREFIX}${myTabId}`, {
+              tasks: steps.slice(index + 1), createdAt: Date.now(), fromUrl: location.href,
+            });
+          }
+          window.location.assign(step.url);
+          return { success: true, completedSteps: done + 1, navigating: true };
+        }
         await fn(step);
         done++;
         onProg(step.step, steps.length, "done");
@@ -1226,6 +1276,29 @@
       }
     }
     return { success: true, completedSteps: done };
+  }
+
+  async function resumeAfterNavigation() {
+    if (myTabId == null) return;
+    const key = `${NAVIGATION_STATE_PREFIX}${myTabId}`;
+    const saved = await sessionGet(key);
+    if (!saved) return;
+    await sessionRemove(key); // avoid replaying a plan after a later reload
+    if (!Array.isArray(saved.tasks) || !saved.tasks.length || Date.now() - saved.createdAt > 120000) return;
+
+    const handle = addAgent(`<div class="vretry">Continuing the task after navigation…</div>`);
+    setProcessing(true);
+    renderTasks(handle, { tasks: saved.tasks });
+    handle.save();
+    const result = await execTasks({ tasks: saved.tasks }, (s, t, status) => updateStep(s, status, t));
+    if (!result.navigating) {
+      handle.append(result.success
+        ? `<div class="vans" style="margin-top:8px">Remaining steps completed.</div>`
+        : `<div class="verr" style="margin-top:8px">Stopped: ${esc(result.error || "")}</div>`);
+      setProcessing(false);
+      if (!result.success) setStatus("err");
+    }
+    handle.save();
   }
 
   // ── Render tasks card into a message handle ───────────────────────────────
@@ -1342,6 +1415,8 @@
       document.getElementById("vpba-yes").addEventListener("click", async () => {
         setProcessing(true);
         renderTasks(handle, tasks);
+        // The confirmed plan can also navigate away from this document.
+        handle.save();
         const execResult = await execTasks(tasks, (s, t, status) => updateStep(s, status, t));
         appendSourcePill(handle, result);
         setProcessing(false);
@@ -1361,6 +1436,8 @@
 
     // ── Execute immediately ──
     renderTasks(handle, tasks);
+    // Preserve the task card before a navigation destroys this document.
+    handle.save();
     let execResult = await execTasks(tasks, (s, t, status) => updateStep(s, status, t));
 
     // ── Post-execution screenshot fallback ──────────────────────────────────
@@ -1406,9 +1483,13 @@
     inp.style.height = Math.min(inp.scrollHeight, 110) + "px";
   });
 
-  // ── Init: tab ID → load history → show welcome if fresh ──────────────────
+  // ── Init: load the browser-wide (not per-tab) conversation ───────────────
   (async () => {
     myTabId = await getMyTabId();
+    const panelState = await new Promise(resolve => {
+      chrome.storage.local.get(BROWSER_PANEL_OPEN_KEY, value => resolve(value?.[BROWSER_PANEL_OPEN_KEY]));
+    });
+    if (panelState) openPanel();
     const hadHistory = await loadHistory();
     if (!hadHistory) {
       const elemCount = document.querySelectorAll("button,input,textarea,select,a[href]").length;
@@ -1417,6 +1498,7 @@
          <div class="vctx">💬 Ask a question &nbsp;|&nbsp; 🤖 Give me a task to perform</div>`
       );
     }
+    await resumeAfterNavigation();
   })();
 
 })();
