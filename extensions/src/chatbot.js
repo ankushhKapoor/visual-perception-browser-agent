@@ -726,6 +726,36 @@
     return null;
   }
 
+  function resolveTypeTarget(task) {
+    const planned = resolveEl(task.target);
+    if (!planned) return null;
+
+    // Small VLMs commonly confuse Gmail's persistent Search mail input with a
+    // compose editor that appeared after an earlier click. Use only local DOM
+    // semantics to repair that unsafe mismatch; the page data is not exported.
+    const descriptor = [
+      planned.getAttribute("aria-label"), planned.getAttribute("placeholder"),
+      planned.getAttribute("role"), planned.type,
+    ].filter(Boolean).join(" ").toLowerCase();
+    const value = String(task.value || "");
+    const looksLikeLongProse = value.length > 80 && /\s/.test(value);
+    if (!looksLikeLongProse || !descriptor.includes("search")) return planned;
+
+    const editors = Array.from(document.querySelectorAll("[contenteditable='true'], [role='textbox'][contenteditable='true']"))
+      .filter(el => !el.closest("#vpba-root"))
+      .filter(el => {
+        const rect = el.getBoundingClientRect();
+        const style = window.getComputedStyle(el);
+        return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+      });
+    const composeEditor = editors.find(el => el.closest("[role='dialog']")) || editors[0];
+    if (composeEditor) {
+      console.warn("[VPBA] Repaired prose target from search control to visible editor");
+      return composeEditor;
+    }
+    return planned;
+  }
+
   // Native value setters — bypass framework wrappers so React/Vue/Angular
   // state actually updates when we write to an input's value.
   const _nativeInputSetter = Object.getOwnPropertyDescriptor(
@@ -789,11 +819,38 @@
       subtree: true, childList: true, characterData: true, attributes: true,
       attributeFilter: ["aria-expanded", "aria-pressed", "class", "style", "hidden"],
     });
-    action();
+    await action();
     await delay(timeoutMs);
     observer.disconnect();
     const video = document.querySelector("video");
     return mutated || Boolean(video && beforeVideoState != null && video.paused !== beforeVideoState);
+  }
+
+  /**
+   * Ask the background worker to use Chrome DevTools Protocol input at this
+   * exact local DOM element. Coordinates and typed text stay inside Chrome;
+   * neither is added to the VLM request. Returns false when CDP is unavailable
+   * (for example, a user has DevTools attached), so the DOM fallback remains.
+   */
+  async function performTrustedAction(action, el, { value = "", key = "Enter" } = {}) {
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return false;
+    return new Promise(resolve => {
+      try {
+        chrome.runtime.sendMessage({
+          type: "PERFORM_TRUSTED_ACTION",
+          request: {
+            action,
+            value,
+            key,
+            point: { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 },
+          },
+        }, response => {
+          if (chrome.runtime.lastError || !response?.success) return resolve(false);
+          resolve(true);
+        });
+      } catch (_) { resolve(false); }
+    });
   }
 
   // ── Action implementations ─────────────────────────────────────────────────
@@ -807,13 +864,15 @@
     await delay(350);
     // A dispatched event alone is not success: a site can ignore it or an
     // overlay can intercept it. Do not report completion without an effect.
-    if (!await observePageEffect(beforeVideoState, () => simulateClick(el))) {
+    if (!await observePageEffect(beforeVideoState, async () => {
+      if (!await performTrustedAction("click", el)) simulateClick(el);
+    })) {
       throw new Error("click: no observable page change after activation");
     }
   }
 
   async function doType(task) {
-    const el = resolveEl(task.target);
+    const el = resolveTypeTarget(task);
     if (!el) throw new Error(`type: element not found (${task.target?.elementId})`);
 
     // Hard guard — refuse to type into the VPBA panel itself
@@ -823,13 +882,19 @@
     el.scrollIntoView({ behavior: "smooth", block: "center" });
     await delay(200);
 
+    const text = String(task.value || "");
+    if (await performTrustedAction("type", el, { value: text })) {
+      await delay(150);
+      if (!elementText(el).includes(text)) throw new Error("type: trusted input was not retained");
+      return;
+    }
+
     // Click first so focus lands AND React's synthetic system registers the interaction
     simulateClick(el);
     await delay(150);
     el.focus({ preventScroll: true });
     await delay(80);
 
-    const text = String(task.value || "");
     if (el.isContentEditable) {
       // Gmail and similar rich editors need an editing command, not an
       // assignment to a non-existent `value` property.
@@ -885,6 +950,10 @@
     const key = task.key || task.value || "Enter";
     const el  = task.target ? resolveEl(task.target) : document.activeElement;
     const tgt = el || document.body;
+    if (el && await performTrustedAction("key", el, { key })) {
+      await delay(250);
+      return;
+    }
     const opts = { key, bubbles: true, cancelable: true, view: window };
 
     tgt.dispatchEvent(new KeyboardEvent("keydown",  opts));

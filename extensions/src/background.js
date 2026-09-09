@@ -8,6 +8,75 @@ const PERCEPTION_API_URL = "http://127.0.0.1:8000/perception";
 const AGENT_TASK_API_URL = "http://127.0.0.1:8000/agent/task";
 const captureInProgressTabs = new Set();
 
+// The debugger transport is used only as a local, trusted input device. It
+// never returns DOM text, screenshots, cookies, network data, or page JS to
+// the VLM; the existing sanitized perception path remains the sole model input.
+function attachDebugger(tabId) {
+  return new Promise((resolve, reject) => {
+    chrome.debugger.attach({ tabId }, "1.3", () => {
+      if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+      else resolve();
+    });
+  });
+}
+
+function sendCdp(tabId, method, params) {
+  return new Promise((resolve, reject) => {
+    chrome.debugger.sendCommand({ tabId }, method, params, (result) => {
+      if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+      else resolve(result);
+    });
+  });
+}
+
+function detachDebugger(tabId) {
+  return new Promise((resolve) => {
+    chrome.debugger.detach({ tabId }, () => resolve());
+  });
+}
+
+async function dispatchTrustedInput(tabId, request) {
+  const point = request?.point || {};
+  const x = Number(point.x);
+  const y = Number(point.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0) {
+    throw new Error("Trusted input requires a visible element coordinate");
+  }
+
+  await attachDebugger(tabId);
+  try {
+    const click = async () => {
+      await sendCdp(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+      await sendCdp(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
+      await sendCdp(tabId, "Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
+    };
+    const key = async (keyName) => {
+      const keyCode = keyName === "Enter" ? 13 : keyName === "Tab" ? 9 : keyName === "Escape" ? 27 : 0;
+      await sendCdp(tabId, "Input.dispatchKeyEvent", { type: "keyDown", key: keyName, code: keyName, windowsVirtualKeyCode: keyCode, nativeVirtualKeyCode: keyCode });
+      await sendCdp(tabId, "Input.dispatchKeyEvent", { type: "keyUp", key: keyName, code: keyName, windowsVirtualKeyCode: keyCode, nativeVirtualKeyCode: keyCode });
+    };
+
+    if (request.action === "click") {
+      await click();
+    } else if (request.action === "type") {
+      await click();
+      // Select and replace the focused field using trusted keyboard input.
+      await sendCdp(tabId, "Input.dispatchKeyEvent", { type: "rawKeyDown", key: "Control", code: "ControlLeft", windowsVirtualKeyCode: 17, modifiers: 2 });
+      await sendCdp(tabId, "Input.dispatchKeyEvent", { type: "keyDown", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: 2 });
+      await sendCdp(tabId, "Input.dispatchKeyEvent", { type: "keyUp", key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: 2 });
+      await sendCdp(tabId, "Input.dispatchKeyEvent", { type: "keyUp", key: "Control", code: "ControlLeft", windowsVirtualKeyCode: 17 });
+      await key("Backspace");
+      await sendCdp(tabId, "Input.insertText", { text: String(request.value || "") });
+    } else if (request.action === "key") {
+      await key(String(request.key || "Enter"));
+    } else {
+      throw new Error(`Unsupported trusted action '${request.action}'`);
+    }
+  } finally {
+    await detachDebugger(tabId);
+  }
+}
+
 chrome.action.onClicked.addListener((tab) => {
   if (!tab.id) {
     return;
@@ -259,6 +328,26 @@ chrome.runtime.onMessage.addListener(
     if (message.type === "GET_TAB_ID") {
       sendResponse({ tabId: sender.tab?.id ?? null });
       return false;
+    }
+
+    if (message.type === "PERFORM_TRUSTED_ACTION") {
+      if (!sender.tab?.id) {
+        sendResponse({ success: false, error: "Trusted action requires a tab" });
+        return false;
+      }
+      (async () => {
+        try {
+          await dispatchTrustedInput(sender.tab.id, message.request);
+          sendResponse({ success: true });
+        } catch (err) {
+          // A tab can already be attached to DevTools, or enterprise policy can
+          // block debugger access. The content script uses its normal local
+          // interaction fallback in either case.
+          console.warn("Trusted action unavailable:", err?.message || err);
+          sendResponse({ success: false, error: err?.message || String(err) });
+        }
+      })();
+      return true;
     }
 
     if (message.type === "SEND_AGENT_TASK") {
