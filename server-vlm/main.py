@@ -127,7 +127,7 @@ async def generate_gemini_output(
 
     url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{config.gemini_model}:generateContent?key={config.gemini_api_key}"
+        f"{config.gemini_model}:generateContent"
     )
     payload = {
         "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
@@ -139,8 +139,17 @@ async def generate_gemini_output(
         },
     }
     async with httpx.AsyncClient(timeout=config.vllm_timeout) as client:
-        response = await client.post(url, json=payload)
-    response.raise_for_status()
+        response = await client.post(
+            url,
+            json=payload,
+            headers={"x-goog-api-key": config.gemini_api_key},
+        )
+    if not response.is_success:
+        # Never call raise_for_status here: its URL representation may contain
+        # sensitive query strings in future provider implementations.
+        raise RuntimeError(
+            f"Gemini API returned HTTP {response.status_code}: {response.text[:500]}"
+        )
     data = response.json()
     try:
         return "".join(part.get("text", "") for part in data["candidates"][0]["content"]["parts"])

@@ -18,24 +18,30 @@ except ImportError:  # Environment variables still work without the convenience 
 load_dotenv()
 
 
+def _env(name: str, default: str | None = None) -> str | None:
+    """Read and trim .env values; avoids accidental whitespace/newlines."""
+    value = os.getenv(name, default)
+    return value.strip() if isinstance(value, str) else value
+
+
 @dataclass
 class VLMConfig:
     # Provider is intentionally local by default. Hosted providers receive only
     # the already-sanitized request assembled by the extension/backend.
-    provider: str = os.getenv("MODEL_PROVIDER", "local").strip().lower()
+    provider: str = (_env("MODEL_PROVIDER", "local") or "local").lower()
 
     # vLLM endpoint (running locally on college machine)
-    vllm_base_url: str = os.getenv("VLLM_BASE_URL", "http://localhost:9000/v1")
+    vllm_base_url: str = _env("VLLM_BASE_URL", "http://localhost:9000/v1") or "http://localhost:9000/v1"
 
     # Model name as registered in vLLM
-    model_name: str = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-VL-3B-Instruct")
+    model_name: str = _env("MODEL_NAME", "Qwen/Qwen2.5-VL-3B-Instruct") or "Qwen/Qwen2.5-VL-3B-Instruct"
 
     # Hosted-provider configuration. Keep keys in the server environment only;
     # never expose them in the extension, UI, logs, or task payload.
-    openai_api_key: str | None = os.getenv("OPENAI_API_KEY")
-    openai_model: str = os.getenv("OPENAI_MODEL", "gpt-5-mini")
-    gemini_api_key: str | None = os.getenv("GEMINI_API_KEY")
-    gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    openai_api_key: str | None = _env("OPENAI_API_KEY")
+    openai_model: str = _env("OPENAI_MODEL", "gpt-5-mini") or "gpt-5-mini"
+    gemini_api_key: str | None = _env("GEMINI_API_KEY")
+    gemini_model: str = _env("GEMINI_MODEL", "gemini-2.5-flash") or "gemini-2.5-flash"
 
     # Max tokens in VLM response (keep small — JSON answers rarely exceed 600 tokens)
     max_response_tokens: int = int(os.getenv("MAX_RESPONSE_TOKENS", "1024"))
