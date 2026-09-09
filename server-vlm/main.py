@@ -117,32 +117,36 @@ async def generate_gemini_output(
     if not config.gemini_api_key:
         raise RuntimeError("GEMINI_API_KEY is required when MODEL_PROVIDER=gemini")
 
+    # Interactions is Gemini's current unified API. Keep every item in this
+    # request sanitized and self-contained; no previous interaction state is
+    # sent or stored.
     parts: list[dict[str, Any]] = [{
-        "text": build_user_prompt(perception_state, request.task_intent)
+        "type": "text",
+        "text": f"{SYSTEM_PROMPT}\n\n{build_user_prompt(perception_state, request.task_intent)}",
     }]
     if image_b64:
         parts.insert(0, {
-            "inline_data": {"mime_type": image_mime_type, "data": image_b64}
+            "type": "image", "data": image_b64, "mime_type": image_mime_type,
         })
 
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{config.gemini_model}:generateContent"
-    )
+    url = "https://generativelanguage.googleapis.com/v1beta/interactions"
     payload = {
-        "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
-        "contents": [{"role": "user", "parts": parts}],
-        "generationConfig": {
-            "temperature": config.temperature,
-            "maxOutputTokens": config.max_response_tokens,
-            "responseMimeType": "application/json",
+        "model": config.gemini_model,
+        "input": parts,
+        "store": False,
+        "response_format": {
+            "type": "text",
+            "mime_type": "application/json",
         },
     }
     async with httpx.AsyncClient(timeout=config.vllm_timeout) as client:
         response = await client.post(
             url,
             json=payload,
-            headers={"x-goog-api-key": config.gemini_api_key},
+            headers={
+                "x-goog-api-key": config.gemini_api_key,
+                "Api-Revision": config.gemini_api_revision,
+            },
         )
     if not response.is_success:
         # Never call raise_for_status here: its URL representation may contain
@@ -152,8 +156,8 @@ async def generate_gemini_output(
         )
     data = response.json()
     try:
-        return "".join(part.get("text", "") for part in data["candidates"][0]["content"]["parts"])
-    except (KeyError, IndexError, TypeError) as exc:
+        return str(data["output_text"])
+    except (KeyError, TypeError) as exc:
         raise RuntimeError(f"Gemini returned no text candidate: {data!r}") from exc
 
 

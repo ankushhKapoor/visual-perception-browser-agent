@@ -22,7 +22,7 @@ PROVIDER="${MODEL_PROVIDER:-local}"
 if [ "$PROVIDER" = "openai" ]; then
   MODEL="${OPENAI_MODEL:-gpt-5-mini}"
 elif [ "$PROVIDER" = "gemini" ]; then
-  MODEL="${GEMINI_MODEL:-gemini-2.5-flash}"
+  MODEL="${GEMINI_MODEL:-gemini-3.8-flash}"
 fi
 VLLM_PORT="${VLLM_PORT:-9000}"
 SERVER_PORT="${VLM_SERVER_PORT:-9001}"
