@@ -41,7 +41,7 @@ class VLMConfig:
     openai_api_key: str | None = _env("OPENAI_API_KEY")
     openai_model: str = _env("OPENAI_MODEL", "gpt-5-mini") or "gpt-5-mini"
     gemini_api_key: str | None = _env("GEMINI_API_KEY")
-    gemini_model: str = _env("GEMINI_MODEL", "gemini-3.8-flash") or "gemini-3.8-flash"
+    gemini_model: str = _env("GEMINI_MODEL", "gemini-3.6-flash") or "gemini-3.6-flash"
     gemini_api_revision: str = _env("GEMINI_API_REVISION", "2026-05-20") or "2026-05-20"
 
     # Max tokens in VLM response (keep small — JSON answers rarely exceed 600 tokens)

@@ -116,6 +116,11 @@ async def generate_gemini_output(
     """Call Gemini directly over HTTPS without adding a browser-side SDK."""
     if not config.gemini_api_key:
         raise RuntimeError("GEMINI_API_KEY is required when MODEL_PROVIDER=gemini")
+    if config.gemini_model == "gemini-2.5-flash":
+        raise RuntimeError(
+            "GEMINI_MODEL=gemini-2.5-flash is retired for new users; "
+            "set GEMINI_MODEL=gemini-3.6-flash in server-vlm/.env and restart"
+        )
 
     # Interactions is Gemini's current unified API. Keep every item in this
     # request sanitized and self-contained; no previous interaction state is
@@ -155,10 +160,33 @@ async def generate_gemini_output(
             f"Gemini API returned HTTP {response.status_code}: {response.text[:500]}"
         )
     data = response.json()
-    try:
-        return str(data["output_text"])
-    except (KeyError, TypeError) as exc:
-        raise RuntimeError(f"Gemini returned no text candidate: {data!r}") from exc
+
+    # `output_text` is an SDK convenience field, not guaranteed in the REST
+    # response. The current Interactions REST schema returns model output in
+    # steps[].content[]; accept legacy outputs[] too for API revision changes.
+    if isinstance(data.get("output_text"), str) and data["output_text"].strip():
+        return data["output_text"]
+
+    text_parts: list[str] = []
+    for step in data.get("steps") or []:
+        if step.get("type") != "model_output":
+            continue
+        for content in step.get("content") or []:
+            if content.get("type") == "text" and isinstance(content.get("text"), str):
+                text_parts.append(content["text"])
+    if not text_parts:
+        for output in data.get("outputs") or []:
+            if output.get("type") == "text" and isinstance(output.get("text"), str):
+                text_parts.append(output["text"])
+    if text_parts:
+        return "".join(text_parts)
+
+    # Log only structural information, never model input, response content, or
+    # API credentials.
+    raise RuntimeError(
+        "Gemini returned no text output "
+        f"(status={data.get('status')!r}, keys={sorted(data.keys())!r})"
+    )
 
 
 async def generate_model_output(
