@@ -16,6 +16,8 @@ import logging
 import os
 import re
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import cv2
@@ -186,6 +188,18 @@ async def agent_task(request: AgentTaskRequest) -> AgentTaskResponse:
             request.redaction_regions,
         )
         log.info("Server-side pixel redaction applied (%d regions)", len(request.redaction_regions))
+
+        # Save ONLY the screenshot that's actually forwarded to VLM
+        try:
+            ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+            save_dir = Path(__file__).parent.parent / "photos" / "output"
+            save_dir.mkdir(parents=True, exist_ok=True)
+            img_path = save_dir / f"vlm_sent_{ts}.png"
+            with open(img_path, "wb") as _f:
+                _f.write(base64.b64decode(safe_image_b64))
+            log.info("Saved VLM-sent screenshot → %s", img_path.name)
+        except Exception as _exc:
+            log.warning("Could not save VLM screenshot: %s", _exc)
 
     # --- Build VLM payload ---
     vlm_payload = {

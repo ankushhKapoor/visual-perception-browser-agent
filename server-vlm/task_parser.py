@@ -13,12 +13,19 @@ from typing import Any
 
 VALID_ACTIONS = {
     "click",
+    "dblclick",
+    "rightclick",
     "type",
+    "key",
     "select",
     "scroll",
     "wait",
     "navigate",
     "hover",
+    "focus",
+    "clear",
+    "drag",
+    "opentab",
     "screenshot",
 }
 
@@ -91,7 +98,11 @@ def _validate_task(raw_task: Any, index: int) -> dict[str, Any]:
     }
 
     # Action-specific validation
-    if action in {"click", "type", "select", "hover"}:
+    if action in {"click", "dblclick", "rightclick", "type", "select", "hover", "focus", "clear"}:
+        task["target"] = _validate_target(raw_task.get("target", {}), step)
+
+    if action == "drag":
+        task["from"] = _validate_target(raw_task.get("from", raw_task.get("source", {})), step)
         task["target"] = _validate_target(raw_task.get("target", {}), step)
 
     if action == "type":
@@ -105,6 +116,11 @@ def _validate_task(raw_task: Any, index: int) -> dict[str, Any]:
         if value is None:
             raise TaskParseError(f"Step {step}: 'select' action requires 'value'")
         task["value"] = str(value)
+
+    if action == "key":
+        task["key"] = str(raw_task.get("key") or raw_task.get("value") or "Enter")
+        if "target" in raw_task:
+            task["target"] = _validate_target(raw_task["target"], step)
 
     if action == "scroll":
         direction = str(raw_task.get("direction", "down")).lower()
@@ -124,10 +140,10 @@ def _validate_task(raw_task: Any, index: int) -> dict[str, Any]:
         if condition == "selector":
             task["selector"] = str(raw_task.get("selector", ""))
 
-    if action == "navigate":
+    if action in {"navigate", "opentab"}:
         url = raw_task.get("url", "")
         if not url:
-            raise TaskParseError(f"Step {step}: 'navigate' action requires 'url'")
+            raise TaskParseError(f"Step {step}: '{action}' action requires 'url'")
         task["url"] = str(url)
 
     return task

@@ -256,6 +256,11 @@ chrome.runtime.onMessage.addListener(
       return true;
     }
 
+    if (message.type === "GET_TAB_ID") {
+      sendResponse({ tabId: sender.tab?.id ?? null });
+      return false;
+    }
+
     if (message.type === "SEND_AGENT_TASK") {
       if (
         !sender.tab?.id ||
@@ -282,13 +287,30 @@ chrome.runtime.onMessage.addListener(
 
           const result = await apiResponse.json();
           console.log("Agent task result:", result);
-          sendResponse({ success: true, tasks: result.tasks, model: result.model });
+          sendResponse({
+            success: true,
+            tasks: result.tasks,
+            model: result.model,
+            latency_ms: result.latency_ms,
+          });
         } catch (err) {
           console.error("Agent task failed:", err);
           sendResponse({ success: false, error: err.message });
         }
       })();
 
+      return true;
+    }
+
+    if (message.type === "OPEN_NEW_TAB") {
+      const url = message.url || "about:blank";
+      chrome.tabs.create({ url, active: true }, (tab) => {
+        if (chrome.runtime.lastError) {
+          sendResponse({ success: false, error: chrome.runtime.lastError.message });
+        } else {
+          sendResponse({ success: true, tabId: tab.id });
+        }
+      });
       return true;
     }
   }

@@ -187,36 +187,23 @@ async def analyze_screenshot(
         output["privacy"]["client_redaction_regions"] = len(regions)
         output["privacy"]["privacy_gate"] = "passed"
 
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-        screenshot_path = OUTPUT_DIR / f"sanitized_screenshot_{timestamp}.png"
-        annotated_path = OUTPUT_DIR / f"annotated_screenshot_{timestamp}.png"
-        json_path = OUTPUT_DIR / f"sanitized_screenshot_{timestamp}.json"
+        # Only keep the latest files — no timestamped copies accumulating on disk.
+        # The full screenshot sent to the VLM is saved separately in agent_router.py.
+        latest_png      = OUTPUT_DIR / "latest_sanitized.png"
+        latest_annotated = OUTPUT_DIR / "latest_annotated.png"
+        latest_json     = OUTPUT_DIR / "latest_report.json"
 
-        if not shutil.copyfile(temp_file, screenshot_path):
-            raise OSError(f"Failed to save screenshot output: {screenshot_path}")
-
-        if not cv2.imwrite(str(annotated_path), annotated_image):
-            raise OSError(f"Failed to save annotated output: {annotated_path}")
+        shutil.copyfile(temp_file, latest_png)
+        cv2.imwrite(str(latest_annotated), annotated_image)
 
         output["artifacts"] = {
-            "sanitizedScreenshot": str(screenshot_path),
-            "annotatedScreenshot": str(annotated_path),
-            "analysisJson": str(json_path)
+            "latestSanitizedScreenshot": str(latest_png),
+            "latestAnnotatedScreenshot": str(latest_annotated),
+            "latestReport": str(latest_json),
         }
 
-        output["artifacts"]["latestSanitizedScreenshot"] = str(
-            OUTPUT_DIR / "latest_sanitized.png"
-        )
-        output["artifacts"]["latestReport"] = str(
-            OUTPUT_DIR / "latest_report.json"
-        )
-
-        with json_path.open("w", encoding="utf-8") as output_file:
+        with latest_json.open("w", encoding="utf-8") as output_file:
             json.dump(output, output_file, indent=2, ensure_ascii=False)
-
-        shutil.copyfile(screenshot_path, OUTPUT_DIR / "latest_sanitized.png")
-        shutil.copyfile(annotated_path, OUTPUT_DIR / "latest_annotated.png")
-        shutil.copyfile(json_path, OUTPUT_DIR / "latest_report.json")
 
         return output
 

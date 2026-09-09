@@ -12,23 +12,23 @@
    ============================================================ */
 
 /**
+ * Live element map — populated by chatbot.js during getPageContext().
+ * Keyed by "element_N" strings, values are the live DOM nodes.
+ * When this map is populated, resolveElement() uses it for reliable resolution.
+ */
+window._vpbaElMap = window._vpbaElMap || new Map();
+
+/**
  * Resolve an element from a task target object.
- * Tries elementId index → CSS selector → centre-of-rect click.
+ * Priority: _vpbaElMap (live references) → CSS selector.
  */
 function resolveElement(target) {
   if (!target) return null;
 
-  // elementId format: "element_N" — look it up in the DOM index built by content.js
+  // Primary: live element map (populated by chatbot.js during capture)
   if (target.elementId) {
-    const index = parseInt(target.elementId.replace("element_", ""), 10) - 1;
-    if (!isNaN(index) && index >= 0) {
-      const allInteractive = document.querySelectorAll(
-        "button, input, textarea, select, a[href], [contenteditable='true'], " +
-        "[role='button'], [role='link'], [role='textbox'], [role='checkbox'], " +
-        "[role='radio'], [role='tab'], [role='menuitem'], h1, h2, h3, h4, h5, h6"
-      );
-      if (allInteractive[index]) return allInteractive[index];
-    }
+    const cached = window._vpbaElMap.get(target.elementId);
+    if (cached && document.contains(cached)) return cached;
   }
 
   // Fallback: CSS selector
@@ -57,54 +57,73 @@ function delay(ms) {
 }
 
 /**
- * Simulate a realistic click: focus → mousedown → mouseup → click.
+ * Simulate a realistic click: full pointer + mouse event chain.
+ * Works for React/SPA frameworks that require the complete sequence.
  */
 function simulateClick(element) {
+  const rect = element.getBoundingClientRect();
+  const cx   = rect.left + rect.width  / 2;
+  const cy   = rect.top  + rect.height / 2;
+  const base = { bubbles: true, cancelable: true, view: window, detail: 1, clientX: cx, clientY: cy };
+
+  element.dispatchEvent(new PointerEvent("pointerover",  { ...base, isPrimary: true }));
+  element.dispatchEvent(new PointerEvent("pointerenter", { ...base, isPrimary: true, bubbles: false }));
+  element.dispatchEvent(new MouseEvent("mouseover",  base));
+  element.dispatchEvent(new PointerEvent("pointermove", { ...base, isPrimary: true }));
+  element.dispatchEvent(new MouseEvent("mousemove",  base));
+  element.dispatchEvent(new PointerEvent("pointerdown", { ...base, isPrimary: true, button: 0, buttons: 1 }));
+  element.dispatchEvent(new MouseEvent("mousedown", { ...base, button: 0, buttons: 1 }));
   element.focus({ preventScroll: true });
-  ["mousedown", "mouseup", "click"].forEach((eventType) => {
-    element.dispatchEvent(
-      new MouseEvent(eventType, { bubbles: true, cancelable: true, view: window })
-    );
-  });
+  element.dispatchEvent(new PointerEvent("pointerup",  { ...base, isPrimary: true, button: 0 }));
+  element.dispatchEvent(new MouseEvent("mouseup",  { ...base, button: 0 }));
+  element.dispatchEvent(new MouseEvent("click",    { ...base, button: 0 }));
+  try { element.click(); } catch (_) {}
 }
 
 /**
- * Simulate typing character-by-character with input/change events.
+ * Simulate typing character-by-character with React-compatible native value setter.
  */
 async function simulateTyping(element, text) {
+  // Click to focus first so React/Vue registers the interaction
+  simulateClick(element);
+  await delay(100);
   element.focus({ preventScroll: true });
+  await delay(50);
 
-  // Clear existing value first
-  if ("value" in element) {
-    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-      window.HTMLInputElement.prototype,
-      "value"
-    )?.set;
-    if (nativeInputValueSetter) {
-      nativeInputValueSetter.call(element, "");
-    } else {
-      element.value = "";
-    }
+  // Clear using native setter so React state updates
+  const nativeInputSetter = Object.getOwnPropertyDescriptor(
+    window.HTMLInputElement.prototype, "value"
+  )?.set;
+  const nativeTextaSetter = Object.getOwnPropertyDescriptor(
+    window.HTMLTextAreaElement.prototype, "value"
+  )?.set;
+
+  if (element instanceof HTMLInputElement && nativeInputSetter) {
+    nativeInputSetter.call(element, "");
+  } else if (element instanceof HTMLTextAreaElement && nativeTextaSetter) {
+    nativeTextaSetter.call(element, "");
+  } else if ("value" in element) {
+    element.value = "";
   }
+  element.dispatchEvent(new Event("input",  { bubbles: true }));
 
   for (const char of String(text)) {
-    element.dispatchEvent(
-      new KeyboardEvent("keydown", { key: char, bubbles: true })
-    );
-    element.dispatchEvent(
-      new KeyboardEvent("keypress", { key: char, bubbles: true })
-    );
+    element.dispatchEvent(new KeyboardEvent("keydown",  { key: char, code: `Key${char.toUpperCase()}`, bubbles: true }));
+    element.dispatchEvent(new KeyboardEvent("keypress", { key: char, bubbles: true }));
 
-    if ("value" in element) {
+    // Append using native setter for React incremental state update
+    if (element instanceof HTMLInputElement && nativeInputSetter) {
+      nativeInputSetter.call(element, element.value + char);
+    } else if (element instanceof HTMLTextAreaElement && nativeTextaSetter) {
+      nativeTextaSetter.call(element, element.value + char);
+    } else if ("value" in element) {
       element.value += char;
     } else if (element.isContentEditable) {
       element.textContent += char;
     }
 
-    element.dispatchEvent(new InputEvent("input", { bubbles: true, data: char }));
-    element.dispatchEvent(
-      new KeyboardEvent("keyup", { key: char, bubbles: true })
-    );
+    element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: char }));
+    element.dispatchEvent(new KeyboardEvent("keyup", { key: char, bubbles: true }));
 
     await delay(30 + Math.random() * 40); // human-like timing
   }
@@ -252,6 +271,23 @@ async function executeHover(task) {
   await delay(200);
 }
 
+async function executeKey(task) {
+  const key    = task.key || task.value || "Enter";
+  const el     = task.target ? resolveElement(task.target) : document.activeElement;
+  const target = el || document.body;
+  const opts   = { key, bubbles: true, cancelable: true, view: window };
+
+  target.dispatchEvent(new KeyboardEvent("keydown",  opts));
+  await delay(60);
+  target.dispatchEvent(new KeyboardEvent("keypress", opts));
+  target.dispatchEvent(new KeyboardEvent("keyup",    opts));
+
+  if (key === "Enter" && el && el.form) {
+    el.form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  }
+  await delay(200);
+}
+
 async function executeScreenshot(_task) {
   // Signal background.js to re-capture and re-analyse
   return new Promise((resolve) => {
@@ -274,6 +310,7 @@ async function executeScreenshot(_task) {
 const ACTION_MAP = {
   click:      executeClick,
   type:       executeType,
+  key:        executeKey,
   select:     executeSelect,
   scroll:     executeScroll,
   wait:       executeWait,

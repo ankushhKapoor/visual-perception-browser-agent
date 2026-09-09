@@ -10,12 +10,19 @@ from typing import Any
 
 VALID_ACTIONS = {
     "click",
+    "dblclick",
+    "rightclick",
     "type",
+    "key",
     "select",
     "scroll",
     "wait",
     "navigate",
     "hover",
+    "focus",
+    "clear",
+    "drag",
+    "opentab",
     "screenshot",
 }
 
@@ -44,8 +51,15 @@ def validate_tasks_response(data: Any) -> dict[str, Any]:
     if not isinstance(tasks, list):
         raise TaskValidationError("Tasks response must contain a 'tasks' list")
 
-    if len(tasks) == 0:
+    # Allow empty tasks for Q&A answer responses (type: "answer" or "mixed" with an answer)
+    is_answer_response = (
+        data.get("type") in ("answer", "mixed") or
+        (len(tasks) == 0 and data.get("answer"))
+    )
+
+    if len(tasks) == 0 and not is_answer_response:
         raise TaskValidationError("Tasks list is empty")
+
 
     if len(tasks) > 50:
         raise TaskValidationError(
@@ -69,7 +83,7 @@ def validate_tasks_response(data: Any) -> dict[str, Any]:
             )
 
         # For click/type/hover: target must have at least one identifier
-        if action in {"click", "type", "hover"}:
+        if action in {"click", "dblclick", "rightclick", "type", "select", "hover", "focus", "clear"}:
             target = task.get("target", {})
             if not isinstance(target, dict):
                 raise TaskValidationError(
@@ -89,6 +103,11 @@ def validate_tasks_response(data: Any) -> dict[str, Any]:
         if action == "navigate" and not task.get("url"):
             raise TaskValidationError(
                 f"Task {i} (step {step}): 'navigate' action requires 'url'"
+            )
+
+        if action == "opentab" and not task.get("url"):
+            raise TaskValidationError(
+                f"Task {i} (step {step}): 'opentab' action requires 'url'"
             )
 
     return data

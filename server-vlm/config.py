@@ -15,17 +15,17 @@ class VLMConfig:
     # Model name as registered in vLLM
     model_name: str = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-VL-3B-Instruct")
 
-    # Max tokens in VLM response
-    max_response_tokens: int = int(os.getenv("MAX_RESPONSE_TOKENS", "2048"))
+    # Max tokens in VLM response (keep small — JSON answers rarely exceed 600 tokens)
+    max_response_tokens: int = int(os.getenv("MAX_RESPONSE_TOKENS", "1024"))
 
     # Max interactive elements to include in context (saves tokens)
-    max_interactive_elements: int = int(os.getenv("MAX_INTERACTIVE_ELEMENTS", "60"))
+    max_interactive_elements: int = int(os.getenv("MAX_INTERACTIVE_ELEMENTS", "35"))
 
     # Max characters for visible text summary sent to VLM
-    max_visible_text_chars: int = int(os.getenv("MAX_VISIBLE_TEXT_CHARS", "2000"))
+    max_visible_text_chars: int = int(os.getenv("MAX_VISIBLE_TEXT_CHARS", "1200"))
 
     # Max visual text items to include in context
-    max_visual_text_items: int = int(os.getenv("MAX_VISUAL_TEXT_ITEMS", "30"))
+    max_visual_text_items: int = int(os.getenv("MAX_VISUAL_TEXT_ITEMS", "20"))
 
     # VLM inference temperature (0 = deterministic JSON)
     temperature: float = float(os.getenv("TEMPERATURE", "0.1"))

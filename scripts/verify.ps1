@@ -39,7 +39,7 @@ Write-Host ""
 
 Write-Host "-- [1] Local FastAPI backend (port 8000) --" -ForegroundColor Yellow
 $backendOk = CheckUrl -Url "http://127.0.0.1:8000/" -Label "Backend root"
-$agentOk   = CheckUrl -Url "http://127.0.0.1:8000/agent/status" -Label "Agent status"
+$agentOk   = CheckUrl -Url "http://127.0.0.1:8000/health" -Label "Backend health"
 
 if (-not $backendOk) {
     Write-Host "[INF] Start backend with:" -ForegroundColor DarkYellow
