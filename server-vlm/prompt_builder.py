@@ -7,8 +7,13 @@ Constructs a structured system + user prompt from:
   - Available element IDs for grounding
 """
 
+import base64
+import io
 import json
+import re
 from typing import Any
+
+from PIL import Image
 
 from config import config
 
@@ -116,6 +121,105 @@ def _truncate(text: str, max_chars: int) -> str:
     if len(text) <= max_chars:
         return text
     return text[:max_chars] + "... [truncated]"
+
+
+def _intent_tokens(task_intent: str) -> set[str]:
+    """Small, deterministic relevance vocabulary; no extra model call."""
+    return {
+        token for token in re.findall(r"[a-z0-9]{3,}", task_intent.lower())
+        if token not in {"with", "that", "this", "from", "please", "would", "could", "should", "about", "into"}
+    }
+
+
+def _element_relevance(element: dict[str, Any], tokens: set[str]) -> int:
+    haystack = " ".join(str(element.get(key) or "") for key in (
+        "text", "placeholder", "label", "name", "id", "type", "category",
+    )).lower()
+    accessibility = element.get("accessibility") or {}
+    haystack += " " + " ".join(str(accessibility.get(key) or "") for key in (
+        "ariaLabel", "accessibleName", "role",
+    )).lower()
+    score = sum(4 for token in tokens if token in haystack)
+    # Inputs, buttons and editable regions remain useful fallbacks even when
+    # task wording does not repeat their page label.
+    if element.get("disabled") or accessibility.get("disabled"):
+        score -= 100
+    if element.get("category") in {"button", "input", "textarea", "contenteditable"}:
+        score += 1
+    return score
+
+
+def _relevant_visible_text(text: str, tokens: set[str]) -> str:
+    """Favor snippets that mention the goal, then fill remaining budget."""
+    clean = re.sub(r"\s+", " ", str(text or "")).strip()
+    if len(clean) <= config.max_visible_text_chars:
+        return clean
+    chunks = re.split(r"(?<=[.!?])\s+|\s{2,}", clean)
+    ranked = sorted(
+        enumerate(chunks),
+        key=lambda item: (sum(token in item[1].lower() for token in tokens), -item[0]),
+        reverse=True,
+    )
+    selected: list[str] = []
+    used = 0
+    for _, chunk in ranked:
+        if not chunk:
+            continue
+        remaining = config.max_visible_text_chars - used
+        if remaining <= 0:
+            break
+        part = chunk[:remaining]
+        selected.append(part)
+        used += len(part) + 1
+    return " ".join(selected)[: config.max_visible_text_chars]
+
+
+def compact_perception_state(
+    perception_state: dict[str, Any], task_intent: str,
+) -> tuple[dict[str, Any], dict[str, int]]:
+    """Build a provider-neutral, task-focused context under strict budgets."""
+    state = dict(perception_state)
+    elements = list(perception_state.get("interactiveElements") or [])
+    tokens = _intent_tokens(task_intent)
+    ranked = sorted(
+        enumerate(elements),
+        key=lambda item: (-_element_relevance(item[1], tokens), item[0]),
+    )
+    selected = [element for _, element in ranked[: config.max_interactive_elements]]
+    original_text = (
+        (perception_state.get("domContext") or {}).get("visibleText")
+        or perception_state.get("visibleText")
+        or ""
+    )
+    compact_text = _relevant_visible_text(str(original_text), tokens)
+    state["interactiveElements"] = selected
+    state["forms"] = []  # controls are already represented; avoid duplicate tokens
+    state["visualText"] = list(perception_state.get("visualText") or [])[:config.max_visual_text_items]
+    state["visibleText"] = compact_text
+    if isinstance(state.get("domContext"), dict):
+        state["domContext"] = {**state["domContext"], "visibleText": compact_text}
+    return state, {
+        "elements_sent": len(selected),
+        "elements_available": len(elements),
+        "text_chars_sent": len(compact_text),
+        "text_chars_available": len(str(original_text)),
+    }
+
+
+def compact_image_b64(image_b64: str | None) -> tuple[str | None, str, dict[str, int]]:
+    """Downsize a sanitized image before every provider receives it."""
+    if not image_b64:
+        return None, "image/jpeg", {"image_bytes_in": 0, "image_bytes_sent": 0}
+    raw = base64.b64decode(image_b64)
+    with Image.open(io.BytesIO(raw)) as image:
+        image = image.convert("RGB")
+        image.thumbnail((config.max_image_side_px, config.max_image_side_px))
+        output = io.BytesIO()
+        image.save(output, format="JPEG", quality=config.image_jpeg_quality, optimize=True)
+    compact = output.getvalue()
+    return base64.b64encode(compact).decode("ascii"), "image/jpeg", {
+        "image_bytes_in": len(raw), "image_bytes_sent": len(compact),
+    }
 
 
 def _format_element(el: dict[str, Any]) -> dict[str, Any]:
@@ -243,6 +347,7 @@ def build_messages(
     perception_state: dict[str, Any],
     task_intent: str,
     image_b64: str | None = None,
+    image_mime_type: str = "image/jpeg",
 ) -> list[dict[str, Any]]:
     """
     Build the full message list for the OpenAI chat completions API.
@@ -258,8 +363,8 @@ def build_messages(
             {
                 "type": "image_url",
                 "image_url": {
-                    "url": f"data:image/png;base64,{image_b64}",
-                    "detail": "high",
+                    "url": f"data:{image_mime_type};base64,{image_b64}",
+                    "detail": "low",
                 },
             },
             {

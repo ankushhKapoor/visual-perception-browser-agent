@@ -20,7 +20,13 @@ from openai import AsyncOpenAI, APIConnectionError, APITimeoutError
 from pydantic import BaseModel, Field
 
 from config import config
-from prompt_builder import build_messages
+from prompt_builder import (
+    SYSTEM_PROMPT,
+    build_messages,
+    build_user_prompt,
+    compact_image_b64,
+    compact_perception_state,
+)
 from task_parser import parse_vlm_output, TaskParseError
 
 
@@ -74,6 +80,7 @@ class AgentResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 _vlm_client: AsyncOpenAI | None = None
+_openai_client: AsyncOpenAI | None = None
 
 
 def get_vlm_client() -> AsyncOpenAI:
@@ -87,6 +94,94 @@ def get_vlm_client() -> AsyncOpenAI:
     return _vlm_client
 
 
+def get_openai_client() -> AsyncOpenAI:
+    """Return the hosted OpenAI client only when explicitly configured."""
+    global _openai_client
+    if not config.openai_api_key:
+        raise RuntimeError("OPENAI_API_KEY is required when MODEL_PROVIDER=openai")
+    if _openai_client is None:
+        _openai_client = AsyncOpenAI(
+            api_key=config.openai_api_key,
+            timeout=config.vllm_timeout,
+        )
+    return _openai_client
+
+
+async def generate_gemini_output(
+    request: AgentRequest,
+    perception_state: dict[str, Any],
+    image_b64: str | None,
+    image_mime_type: str,
+) -> str:
+    """Call Gemini directly over HTTPS without adding a browser-side SDK."""
+    if not config.gemini_api_key:
+        raise RuntimeError("GEMINI_API_KEY is required when MODEL_PROVIDER=gemini")
+
+    parts: list[dict[str, Any]] = [{
+        "text": build_user_prompt(perception_state, request.task_intent)
+    }]
+    if image_b64:
+        parts.insert(0, {
+            "inline_data": {"mime_type": image_mime_type, "data": image_b64}
+        })
+
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{config.gemini_model}:generateContent?key={config.gemini_api_key}"
+    )
+    payload = {
+        "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+        "contents": [{"role": "user", "parts": parts}],
+        "generationConfig": {
+            "temperature": config.temperature,
+            "maxOutputTokens": config.max_response_tokens,
+            "responseMimeType": "application/json",
+        },
+    }
+    async with httpx.AsyncClient(timeout=config.vllm_timeout) as client:
+        response = await client.post(url, json=payload)
+    response.raise_for_status()
+    data = response.json()
+    try:
+        return "".join(part.get("text", "") for part in data["candidates"][0]["content"]["parts"])
+    except (KeyError, IndexError, TypeError) as exc:
+        raise RuntimeError(f"Gemini returned no text candidate: {data!r}") from exc
+
+
+async def generate_model_output(
+    request: AgentRequest,
+    messages: list[dict[str, Any]],
+    perception_state: dict[str, Any],
+    image_b64: str | None,
+    image_mime_type: str,
+) -> str:
+    """Generate through the selected server-side provider."""
+    if config.provider == "local":
+        completion = await get_vlm_client().chat.completions.create(
+            model=config.model_name,
+            messages=messages,  # type: ignore[arg-type]
+            max_tokens=config.max_response_tokens,
+            temperature=config.temperature,
+        )
+        return completion.choices[0].message.content or ""
+
+    if config.provider == "openai":
+        # Keep the existing multimodal chat message format, with no API key or
+        # raw page data ever exposed to the extension.
+        completion = await get_openai_client().chat.completions.create(
+            model=config.openai_model,
+            messages=messages,  # type: ignore[arg-type]
+            max_tokens=config.max_response_tokens,
+            temperature=config.temperature,
+        )
+        return completion.choices[0].message.content or ""
+
+    if config.provider == "gemini":
+        return await generate_gemini_output(request, perception_state, image_b64, image_mime_type)
+
+    raise RuntimeError("MODEL_PROVIDER must be one of: local, openai, gemini")
+
+
 # ---------------------------------------------------------------------------
 # App lifecycle
 # ---------------------------------------------------------------------------
@@ -94,10 +189,16 @@ def get_vlm_client() -> AsyncOpenAI:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info(
-        "VLM server starting — model=%s vllm=%s",
-        config.model_name,
-        config.vllm_base_url,
+        "VLM server starting — provider=%s model=%s",
+        config.provider,
+        config.active_model_name,
     )
+    # Only local vLLM has a health endpoint to ping.
+    if config.provider != "local":
+        yield
+        log.info("VLM server shutting down")
+        return
+
     # Warm up: ping vLLM health endpoint
     try:
         async with httpx.AsyncClient(timeout=10) as client:
@@ -142,14 +243,28 @@ app.add_middleware(
 def root():
     return {
         "service": "VLM Browser Agent Server",
-        "model": config.model_name,
+        "model": config.active_model_name,
+        "provider": config.provider,
         "status": "running",
     }
 
 
 @app.get("/health")
 async def health():
-    """Health check — also pings vLLM."""
+    """Health check; local mode additionally pings vLLM."""
+    if config.provider != "local":
+        configured = (
+            bool(config.openai_api_key) if config.provider == "openai"
+            else bool(config.gemini_api_key) if config.provider == "gemini"
+            else False
+        )
+        return {
+            "status": "healthy" if configured else "misconfigured",
+            "provider": config.provider,
+            "provider_configured": configured,
+            "model": config.active_model_name,
+        }
+
     try:
         async with httpx.AsyncClient(timeout=5) as client:
             resp = await client.get(
@@ -162,7 +277,8 @@ async def health():
     return {
         "status": "healthy",
         "vllm_reachable": vllm_ok,
-        "model": config.model_name,
+        "provider": config.provider,
+        "model": config.active_model_name,
     }
 
 
@@ -191,13 +307,23 @@ async def agent_task(request: AgentRequest) -> AgentResponse:
         len(request.perception_state.get("interactiveElements", [])),
     )
 
+    compact_state, context_budget = compact_perception_state(
+        request.perception_state, request.task_intent,
+    )
+    compact_image, image_mime_type, image_budget = compact_image_b64(request.image_b64)
     messages = build_messages(
-        perception_state=request.perception_state,
+        perception_state=compact_state,
         task_intent=request.task_intent,
-        image_b64=request.image_b64,
+        image_b64=compact_image,
+        image_mime_type=image_mime_type,
+    )
+    log.info(
+        "Input budget — elements=%d/%d text=%d/%d image=%d/%d bytes",
+        context_budget["elements_sent"], context_budget["elements_available"],
+        context_budget["text_chars_sent"], context_budget["text_chars_available"],
+        image_budget["image_bytes_sent"], image_budget["image_bytes_in"],
     )
 
-    client = get_vlm_client()
     last_error: str = ""
     t_start = time.monotonic()
 
@@ -218,11 +344,8 @@ async def agent_task(request: AgentRequest) -> AgentResponse:
             })
 
         try:
-            completion = await client.chat.completions.create(
-                model=config.model_name,
-                messages=messages,  # type: ignore[arg-type]
-                max_tokens=config.max_response_tokens,
-                temperature=config.temperature,
+            raw_output = await generate_model_output(
+                request, messages, compact_state, compact_image, image_mime_type,
             )
         except (APIConnectionError, APITimeoutError) as exc:
             raise HTTPException(
@@ -235,7 +358,6 @@ async def agent_task(request: AgentRequest) -> AgentResponse:
                 detail=f"vLLM inference error: {exc}",
             ) from exc
 
-        raw_output = completion.choices[0].message.content or ""
         latency_ms = int((time.monotonic() - t_start) * 1000)
 
         log.debug("VLM raw output (attempt %d):\n%s", attempt + 1, raw_output[:800])
@@ -250,7 +372,7 @@ async def agent_task(request: AgentRequest) -> AgentResponse:
             return AgentResponse(
                 success=True,
                 tasks=tasks,
-                model=config.model_name,
+                model=config.active_model_name,
                 latency_ms=latency_ms,
             )
         except TaskParseError as exc:

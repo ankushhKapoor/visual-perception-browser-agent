@@ -607,10 +607,10 @@
   // ── Call agent backend ────────────────────────────────────────────────────────
   async function callAgent(intent, forceImage = false) {
     const ctx = getPageContext();
-    // Action intents always get the screenshot so the VLM can visually ground element IDs.
-    // Question/info intents skip the screenshot (text context is sufficient).
-    // forceImage overrides everything (used on retries).
-    const sendImage = forceImage || !isQuestion(intent);
+    // Text-first applies to tasks as well as questions. This keeps hosted API
+    // cost down; the model can return requires_screenshot:true and the retry
+    // path will send one sanitized image only when DOM grounding is insufficient.
+    const sendImage = forceImage;
     const image = sendImage ? await captureSanitizedImage() : null;
 
     return new Promise((resolve, reject) => {
