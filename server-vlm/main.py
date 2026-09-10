@@ -79,14 +79,45 @@ def validate_plan_against_current_page(tasks: dict[str, Any], request: "AgentReq
         (request.perception_state.get("domContext") or {}).get("visibleText")
         or request.perception_state.get("visibleText") or ""
     ).lower()
+    element_text = " ".join(
+        " ".join(str(element.get(key) or "") for key in ("text", "label", "placeholder", "role"))
+        for element in (request.perception_state.get("interactiveElements") or [])
+        if isinstance(element, dict)
+    ).lower()
     composer_present = "mail.google.com" in parsed.netloc and any(
-        marker in visible_text for marker in ("new message", "to recipients", "subject")
+        marker in f"{visible_text} {element_text}"
+        for marker in ("new message", "to recipients", "subject", "message body")
     )
     if composer_present and any(action in {"navigate", "opentab"} for action in action_names):
         raise TaskParseError(
             "Gmail compose editor is already present. Do not navigate or open Compose again; "
             "return only tasks that fill the visible compose fields."
         )
+    if composer_present:
+        # Gmail's editor is already in the fresh DOM. A Tab-only body phase is
+        # incomplete: it focuses a field but does not place the requested
+        # message there. Force the model to use the real visible editor target.
+        uses_tab = any(
+            step.get("action") == "key" and
+            str(step.get("key") or step.get("value") or "").lower() == "tab"
+            for step in actions
+        )
+        elements_by_id = {
+            str(element.get("elementId")): element
+            for element in (request.perception_state.get("interactiveElements") or [])
+            if isinstance(element, dict) and element.get("elementId")
+        }
+        types_into_editor = any(
+            step.get("action") == "type" and
+            bool(elements_by_id.get(str((step.get("target") or {}).get("elementId")), {}).get("editable"))
+            for step in actions
+            if isinstance(step.get("target"), dict)
+        )
+        if uses_tab or not types_into_editor:
+            raise TaskParseError(
+                "Gmail compose is open. Return explicit type tasks for the requested subject and visible editable message body. "
+                "Do not use Tab, and do not omit the message-body type task."
+            )
 
 
 def normalize_direct_search_first_phase(tasks: dict[str, Any], request: "AgentRequest") -> dict[str, Any]:
@@ -571,6 +602,12 @@ async def agent_task(request: AgentRequest) -> AgentResponse:
             # browser task into three provider calls while repeating the same
             # stale search plan.
             if "Continuation is already on a search-results page" in last_error:
+                return AgentResponse(
+                    success=False,
+                    error=last_error,
+                    latency_ms=latency_ms,
+                )
+            if "Gmail compose editor is already present" in last_error:
                 return AgentResponse(
                     success=False,
                     error=last_error,

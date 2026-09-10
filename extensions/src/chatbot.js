@@ -47,6 +47,7 @@
   let pendingTasks = null;   // eslint-disable-line no-unused-vars
   let chatHistory  = [];     // [{ role:"user"|"agent", text?:"", html?:"" }]
   let myTabId = null;
+  let taskCancelled = false;
 
   /**
    * Live element reference map — populated during each getPageContext() call.
@@ -322,6 +323,7 @@
   #vpba-send:hover:not(:disabled){opacity:.85}
   #vpba-send:active:not(:disabled){transform:scale(.93)}
   #vpba-send:disabled{opacity:.3;cursor:not-allowed}
+  #vpba-send.stop { background: linear-gradient(135deg,#dc2626,#991b1b); font-size: 13px; }
   `;
 
   // ── HTML ────────────────────────────────────────────────────────────────────
@@ -387,10 +389,20 @@
   function now() { return new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}); }
   function scrollBot() { msgs.scrollTop = msgs.scrollHeight; }
   function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+  function extensionContextAvailable() {
+    // Chrome removes runtime.id from content scripts that belonged to an older
+    // extension build. This occurs only after Reload in chrome://extensions;
+    // an already injected script cannot be revived and the tab must refresh.
+    return Boolean(chrome?.runtime?.id);
+  }
+  function extensionReloadError() {
+    return new Error("Extension was reloaded. Refresh this tab once, then run the task again.");
+  }
 
   function getMyTabId() {
     return new Promise(resolve => {
       try {
+        if (!extensionContextAvailable()) return resolve(null);
         chrome.runtime.sendMessage({ type: "GET_TAB_ID" }, response => {
           resolve(chrome.runtime.lastError ? null : response?.tabId ?? null);
         });
@@ -398,6 +410,7 @@
     });
   }
   function sessionGet(key) {
+    if (!extensionContextAvailable()) return Promise.resolve(undefined);
     return new Promise(resolve => chrome.storage.session.get(key, value => {
       if (chrome.runtime.lastError) {
         console.warn("Could not read task continuation:", chrome.runtime.lastError.message);
@@ -407,12 +420,14 @@
     }));
   }
   function sessionSet(key, value) {
+    if (!extensionContextAvailable()) return Promise.reject(extensionReloadError());
     return new Promise((resolve, reject) => chrome.storage.session.set({ [key]: value }, () => {
       if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
       resolve();
     }));
   }
   function sessionRemove(key) {
+    if (!extensionContextAvailable()) return Promise.resolve();
     return new Promise(resolve => chrome.storage.session.remove(key, () => resolve()));
   }
 
@@ -527,9 +542,27 @@
 
   function setProcessing(v) {
     processing = v;
-    sendB.disabled = v;
+    // Keep the single action button usable while work is running: it becomes
+    // a Stop button rather than a disabled Send button.
+    sendB.disabled = false;
+    sendB.classList.toggle("stop", v);
+    sendB.textContent = v ? "■" : "▶";
+    sendB.title = v ? "Stop agent" : "Send task";
     inp.disabled = v;
     setStatus(v ? "run" : "ok");
+  }
+
+  function stopActiveTask() {
+    if (!processing) return;
+    taskCancelled = true;
+    // A navigation continuation must not resurrect a task that the user
+    // cancelled while its page was loading.
+    if (myTabId != null) sessionRemove(`${NAVIGATION_STATE_PREFIX}${myTabId}`);
+    setProcessing(false);
+  }
+
+  function ensureNotCancelled() {
+    if (taskCancelled) throw new Error("Stopped by user");
   }
 
   // ── PII sanitizer ────────────────────────────────────────────────────────────
@@ -563,6 +596,7 @@
     const allInteractive = Array.from(
       document.querySelectorAll(
         "button,input,textarea,select,a[href],[contenteditable='true']," +
+        "[contenteditable]," +
         "[role='button'],[role='link'],[role='textbox'],[role='checkbox'],[role='tab']"
       )
     ).filter(el => {
@@ -599,6 +633,7 @@
         category: { BUTTON:"button", INPUT:"input", TEXTAREA:"textarea",
                     SELECT:"select", A:"link" }[el.tagName] || el.tagName.toLowerCase(),
         role: el.getAttribute("role") || null,
+        editable: Boolean(el.isContentEditable),
         type: el.getAttribute("type") || null,
         text: sanitize((el.innerText || el.value || el.textContent || "").trim().slice(0, 120)),
         placeholder: sanitize(el.getAttribute("placeholder") || ""),
@@ -638,6 +673,7 @@
   async function captureSanitizedImage() {
     return new Promise(resolve => {
       try {
+        if (!extensionContextAvailable()) return resolve(null);
         chrome.runtime.sendMessage({ type: "CAPTURE_SCREENSHOT" }, res => {
           if (chrome.runtime.lastError || !res?.success) return resolve(null);
           resolve(res.screenshot);
@@ -664,6 +700,8 @@
 
   // ── Call agent backend ────────────────────────────────────────────────────────
   async function callAgent(intent, forceImage = false) {
+    ensureNotCancelled();
+    if (!extensionContextAvailable()) throw extensionReloadError();
     const ctx = getPageContext();
     // Text-first applies to tasks as well as questions. This keeps hosted API
     // cost down; the model can return requires_screenshot:true and the retry
@@ -684,6 +722,7 @@
           },
         }, res => {
           if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+          if (taskCancelled) return reject(new Error("Stopped by user"));
           if (!res?.success) return reject(new Error(res?.error || "Agent call failed"));
           resolve({
             tasks:          res.tasks,
@@ -870,6 +909,18 @@
     return (el.innerText || el.textContent || "").trim();
   }
 
+  // Rich editors (notably Gmail) render line breaks, non-breaking spaces and
+  // invisible caret markers differently from the submitted text. Compare a
+  // normalized representation so a successful trusted input is not reported
+  // as failed merely because of rendering details.
+  function hasTypedText(el, expected) {
+    const normalize = value => String(value || "")
+      .replace(/[\u200B-\u200D\uFEFF]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    return normalize(elementText(el)).includes(normalize(expected));
+  }
+
   async function observePageEffect(beforeVideoState, action, timeoutMs = 900) {
     let mutated = false;
     const observer = new MutationObserver(() => { mutated = true; });
@@ -895,6 +946,7 @@
     if (rect.width <= 0 || rect.height <= 0) return false;
     return new Promise(resolve => {
       try {
+        if (!extensionContextAvailable()) return resolve(false);
         chrome.runtime.sendMessage({
           type: "PERFORM_TRUSTED_ACTION",
           request: {
@@ -1000,9 +1052,11 @@
 
     const text = String(task.value || "");
     if (await performTrustedAction("type", el, { value: text })) {
-      await delay(150);
-      if (!elementText(el).includes(text)) throw new Error("type: trusted input was not retained");
-      return;
+      // Gmail updates its contenteditable rendering asynchronously. Give it a
+      // short render window; if it really did not retain the value, continue
+      // into the normal DOM fallback below instead of falsely stopping.
+      await delay(el.isContentEditable ? 450 : 180);
+      if (hasTypedText(el, text)) return;
     }
 
     // Click first so focus lands AND React's synthetic system registers the interaction
@@ -1022,7 +1076,7 @@
         el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
       }
       await delay(120);
-      if (!elementText(el).includes(text)) throw new Error("type: editor did not retain entered text");
+      if (!hasTypedText(el, text)) throw new Error("type: editor did not retain entered text");
       return;
     }
 
@@ -1052,7 +1106,7 @@
     }
 
     el.dispatchEvent(new Event("change", { bubbles: true }));
-    if (elementText(el) !== text) throw new Error("type: input did not retain entered text");
+    if (!hasTypedText(el, text)) throw new Error("type: input did not retain entered text");
   }
 
   /**
@@ -1281,6 +1335,7 @@
     if (!url) throw new Error("opentab: url required");
     return new Promise((resolve, reject) => {
       try {
+        if (!extensionContextAvailable()) return reject(extensionReloadError());
         chrome.runtime.sendMessage({ type: "OPEN_NEW_TAB", url, continuation: task._continuation }, res => {
           if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
           if (!res?.success) return reject(new Error(res?.error || "Could not open tab"));
@@ -1316,6 +1371,14 @@
   // sequence as well: an Enter submission with no later result click.
   function needsFreshResultPlan(tasksJson) {
     const steps = tasksJson?.tasks || [];
+    // The returned list is an execution contract: execute every listed step.
+    // A continuation is only for a single, explicitly incomplete phase whose
+    // next target cannot exist until that phase changes the page. This applies
+    // uniformly to every task type—tabs, forms, shopping, mail, searches,
+    // and mixed plans—not merely a particular URL or prompt.
+    if (steps.length !== 1) {
+      return false;
+    }
     if (tasksJson?.task_complete === false) return true;
     // A direct YouTube/Google results URL is a search phase even when a model
     // incorrectly labels its one navigation step as complete.
@@ -1352,6 +1415,7 @@
     if (!steps.length) return { success: true, completedSteps: 0 };
     let done = 0;
     for (let index = 0; index < steps.length; index++) {
+      if (taskCancelled) return { success: false, completedSteps: done, error: "Stopped by user" };
       const step = steps[index];
       onProg(step.step, steps.length, "running");
       const fn = ACTION[step.action];
@@ -1438,6 +1502,14 @@
       const handle = addAgent(`<div class="vretry">Reading the new page to continue the task...</div>`);
       setProcessing(true);
       try {
+        // Gmail's direct-compose URL returns before its editable controls are
+        // mounted. Wait for those real elements before taking the second (and
+        // final) page snapshot; otherwise the model sees only the shell and
+        // keeps proposing Compose again.
+        if (/mail\.google\.com$/i.test(location.hostname)) {
+          await doWait({ condition: "selector", selector: "[role='dialog'] [contenteditable='true'], [role='dialog'] [role='textbox']", timeout_ms: 4500 });
+        }
+        ensureNotCancelled();
         const followUpIntent = continuationIntent(saved.intent, saved.completed);
         // The second and final result-selection phase always receives fresh
         // DOM plus a locally redacted image. This applies to every supported
@@ -1523,6 +1595,7 @@
     if (!text || processing) return;
     inp.value = ""; inp.style.height = "38px";
 
+    taskCancelled = false;
     addUser(text);
     const handle = addAgent(); // shows thinking dots
     setProcessing(true);
@@ -1661,7 +1734,7 @@
   }
 
   // ── Input events ──────────────────────────────────────────────────────────
-  sendB.addEventListener("click", handleSend);
+  sendB.addEventListener("click", () => processing ? stopActiveTask() : handleSend());
   inp.addEventListener("keydown", e => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
   });

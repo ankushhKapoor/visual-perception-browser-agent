@@ -98,6 +98,11 @@ EXECUTION RULES
   compose editor is present in the current interactive elements or visible
   text. If a compose editor is already present, fill its recipient, subject,
   and body fields; never navigate back to Gmail or open Compose again.
+- GMAIL COMPOSE COMPLETENESS: Use a separate `type` action with an explicit
+  provided target for every requested field. In particular, type the subject
+  into the subject element AND type the message into the visible editable
+  message-body element. Never use Tab as a substitute for typing the body;
+  Tab may move focus but it does not complete the user's message.
 - Include target.selector for every DOM target. Use only supplied IDs.
 - Set task_complete:false if the next required target will appear only after
   this plan changes the page. Examples: submit a YouTube search before choosing
@@ -235,6 +240,7 @@ def _format_element(el: dict[str, Any]) -> dict[str, Any]:
         "tag": el.get("tag"),
         "category": el.get("category"),
         "role": el.get("role"),
+        "editable": bool(el.get("editable", False)),
         "type": el.get("type"),
         "text": _truncate(str(el.get("text") or ""), 120),
         "placeholder": _truncate(str(el.get("placeholder") or ""), 80) or None,
