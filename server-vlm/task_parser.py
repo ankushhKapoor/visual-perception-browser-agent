@@ -26,6 +26,7 @@ VALID_ACTIONS = {
     "clear",
     "drag",
     "opentab",
+    "closetabs",
     "screenshot",
 }
 
@@ -146,6 +147,35 @@ def _validate_task(raw_task: Any, index: int) -> dict[str, Any]:
         if not url:
             raise TaskParseError(f"Step {step}: '{action}' action requires 'url'")
         task["url"] = str(url)
+
+    if action == "closetabs":
+        scope = str(raw_task.get("scope") or "all_except_current")
+        if scope not in {"all_except_current", "all_unpinned_except_current", "tab_numbers", "tab_range"}:
+            raise TaskParseError(
+                f"Step {step}: unsupported closetabs scope {scope!r}"
+            )
+        task["scope"] = scope
+        if scope == "tab_numbers":
+            numbers = raw_task.get("tab_numbers")
+            if not isinstance(numbers, list) or not numbers or any(
+                not isinstance(number, int) or number < 1 for number in numbers
+            ):
+                raise TaskParseError(
+                    f"Step {step}: tab_numbers must be a non-empty list of positive tab numbers"
+                )
+            task["tab_numbers"] = sorted(set(numbers))
+        if scope == "tab_range":
+            tab_range = raw_task.get("tab_range")
+            if (
+                not isinstance(tab_range, dict) or
+                not isinstance(tab_range.get("start"), int) or
+                not isinstance(tab_range.get("end"), int) or
+                tab_range["start"] < 1 or tab_range["end"] < 1
+            ):
+                raise TaskParseError(
+                    f"Step {step}: tab_range requires positive integer start and end"
+                )
+            task["tab_range"] = {"start": tab_range["start"], "end": tab_range["end"]}
 
     return task
 

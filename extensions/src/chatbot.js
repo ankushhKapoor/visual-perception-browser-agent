@@ -58,6 +58,10 @@
    * during capture, causing index mismatches and silent no-ops.
    */
   const _elMap = new Map();
+  // A framework may replace a node after a previous action (for example a
+  // disabled Send button becoming enabled after typing). Keep local-only
+  // fingerprints so the executor can bind the replacement safely.
+  const _elDescriptors = new Map();
 
   // ── CSS ────────────────────────────────────────────────────────────────────
   const css = `
@@ -592,6 +596,7 @@
   // ── Page context extraction ────────────────────────────────────────────────
   function getPageContext() {
     _elMap.clear(); // reset for this capture session
+    _elDescriptors.clear();
 
     const allInteractive = Array.from(
       document.querySelectorAll(
@@ -618,6 +623,12 @@
       // the same real element it was shown, rather than a guessed CSS path.
       el.setAttribute("data-vpba-element", id);
       const r = el.getBoundingClientRect();
+      const text = sanitize((el.innerText || el.value || el.textContent || "").trim().slice(0, 120));
+      const placeholder = sanitize(el.getAttribute("placeholder") || "");
+      const label = sanitize(el.getAttribute("aria-label") || el.getAttribute("title") || "");
+      const role = el.getAttribute("role") || null;
+      const testId = el.getAttribute("data-testid") || "";
+      const name = el.getAttribute("name") || "";
       let safeHref = null;
       if (el instanceof HTMLAnchorElement && el.href) {
         try {
@@ -626,18 +637,19 @@
           safeHref = href.toString();
         } catch (_) { /* omit malformed hrefs */ }
       }
+      _elDescriptors.set(id, { tag: el.tagName.toLowerCase(), role, text, placeholder, label, testId, name });
       return {
         elementId: id,
         selector: `[data-vpba-element="${id}"]`,
         tag: el.tagName.toLowerCase(),
         category: { BUTTON:"button", INPUT:"input", TEXTAREA:"textarea",
                     SELECT:"select", A:"link" }[el.tagName] || el.tagName.toLowerCase(),
-        role: el.getAttribute("role") || null,
+        role,
         editable: Boolean(el.isContentEditable),
         type: el.getAttribute("type") || null,
-        text: sanitize((el.innerText || el.value || el.textContent || "").trim().slice(0, 120)),
-        placeholder: sanitize(el.getAttribute("placeholder") || ""),
-        label: sanitize(el.getAttribute("aria-label") || el.getAttribute("title") || ""),
+        text,
+        placeholder,
+        label,
         href: safeHref,
         disabled: Boolean(el.disabled),
         rect: { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) },
@@ -669,6 +681,22 @@
     };
   }
 
+  async function getPrivacyPipeline(timeoutMs = 2500) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const privacy = window.vpbaPrivacy;
+      if (
+        privacy &&
+        typeof privacy.extractPageContext === "function" &&
+        typeof privacy.redactScreenshot === "function" &&
+        typeof privacy.createRedactionMap === "function" &&
+        typeof privacy.assertSanitizedScreenshot === "function"
+      ) return privacy;
+      await delay(50);
+    }
+    return null;
+  }
+
   // ── Screenshot via background.js ─────────────────────────────────────────────
   async function captureSanitizedImage() {
     return new Promise(resolve => {
@@ -682,14 +710,13 @@
     }).then(async rawScreenshot => {
       if (!rawScreenshot) return null;
       // content.js provides the local redactor. Never fall back to a raw image.
-      const pageContext = window.extractPageContext?.();
-      const redact = window.redactScreenshot;
-      const makeMap = window.createRedactionMap;
-      const assertSanitized = window.assertSanitizedScreenshot;
-      if (!pageContext || typeof redact !== "function" || typeof makeMap !== "function" || typeof assertSanitized !== "function") {
+      const privacy = await getPrivacyPipeline();
+      if (!privacy) {
         console.warn("[VPBA] Screenshot omitted: local redaction pipeline unavailable");
         return null;
       }
+      const pageContext = privacy.extractPageContext();
+      const { redactScreenshot: redact, createRedactionMap: makeMap, assertSanitizedScreenshot: assertSanitized } = privacy;
       const sensitive = pageContext.sensitiveElements || [];
       const redactionMap = makeMap(sensitive);
       const dataUrl = await redact(rawScreenshot, sensitive);
@@ -816,10 +843,56 @@
 
     if (target.elementId) {
       const cached = _elMap.get(target.elementId);
-      if (cached && document.contains(cached)) return cached;
+      if (cached && isVisiblePageElement(cached)) return cached;
+      const replacement = recoverReplacedElement(target.elementId);
+      if (replacement) return replacement;
       console.warn(`[VPBA] _elMap miss for ${target.elementId}`);
     }
 
+    return null;
+  }
+
+  function isVisiblePageElement(el) {
+    if (!el || !document.contains(el) || el.closest("#vpba-root")) return false;
+    const rect = el.getBoundingClientRect();
+    const style = window.getComputedStyle(el);
+    return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+  }
+
+  function recoverReplacedElement(elementId) {
+    const descriptor = _elDescriptors.get(elementId);
+    if (!descriptor) return null;
+    const norm = value => String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+    const expected = [descriptor.label, descriptor.placeholder, descriptor.text, descriptor.testId, descriptor.name]
+      .map(norm).filter(Boolean);
+    if (!expected.length) return null;
+    const candidates = Array.from(document.querySelectorAll(
+      "button,input,textarea,select,a[href],[contenteditable],[role='button'],[role='link'],[role='textbox']"
+    )).filter(isVisiblePageElement).map(el => {
+      const values = [el.getAttribute("aria-label"), el.getAttribute("title"), el.getAttribute("placeholder"),
+        el.getAttribute("data-testid"), el.getAttribute("name"), elementText(el)].map(norm);
+      let score = descriptor.tag === el.tagName.toLowerCase() ? 3 : 0;
+      if (descriptor.role && descriptor.role === el.getAttribute("role")) score += 3;
+      for (const term of expected) {
+        if (values.includes(term)) score += 12;
+        else if (values.some(value => value && (value.includes(term) || term.includes(value)))) score += 4;
+      }
+      return { el, score };
+    }).filter(candidate => candidate.score > 0).sort((a, b) => b.score - a.score);
+    const best = candidates[0];
+    if (!best || best.score < 12 || (candidates[1] && best.score === candidates[1].score)) return null;
+    best.el.setAttribute("data-vpba-element", elementId);
+    _elMap.set(elementId, best.el);
+    return best.el;
+  }
+
+  async function resolveLiveElement(target, timeoutMs = 1000) {
+    const deadline = Date.now() + timeoutMs;
+    do {
+      const element = resolveEl(target);
+      if (element) return element;
+      await delay(50);
+    } while (Date.now() < deadline);
     return null;
   }
 
@@ -966,7 +1039,7 @@
   // ── Action implementations ─────────────────────────────────────────────────
 
   async function doClick(task) {
-    const el = resolveEl(task.target);
+    const el = await resolveLiveElement(task.target);
     if (!el) throw new Error(`click: element not found (${task.target?.elementId || task.target?.selector})`);
     const video = document.querySelector("video");
     const beforeVideoState = video ? video.paused : null;
@@ -1345,6 +1418,24 @@
     });
   }
 
+  async function doCloseTabs(task) {
+    return new Promise((resolve, reject) => {
+      try {
+        if (!extensionContextAvailable()) return reject(extensionReloadError());
+        chrome.runtime.sendMessage({
+          type: "CLOSE_TABS",
+          scope: task.scope || "all_except_current",
+          tabNumbers: task.tab_numbers || [],
+          tabRange: task.tab_range || null,
+        }, response => {
+          if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+          if (!response?.success) return reject(new Error(response?.error || "Could not close other tabs"));
+          resolve(response);
+        });
+      } catch (error) { reject(error); }
+    });
+  }
+
   /** Actions whose completion mutates the DOM (AJAX, navigation, React re-renders). */
   const DOM_MUTATING = new Set(["click", "dblclick", "rightclick", "type", "key", "navigate", "opentab", "drag"]);
 
@@ -1363,6 +1454,7 @@
     clear:      doClear,
     drag:       doDrag,
     opentab:    doOpenTab,
+    closetabs:  doCloseTabs,
     screenshot: async () => {},
   };
 
@@ -1407,6 +1499,53 @@
     return `${originalIntent}\n\nAGENT CONTINUATION: The browser has already completed: ${completed || "the previous phase"}. ` +
       "Read the current sanitized page state as the source of truth. Do not repeat, reopen, navigate back, or search again for completed actions. " +
       "Return only the remaining steps needed to finish the original request.";
+  }
+
+  /**
+   * Local final-step recovery for an explicit shopping request. Some small
+   * models answer instead of clicking a visibly available cart control on a
+   * results page. We only use this when a cart button belongs to a product
+   * card matching the requested product words; checkout/payment is never
+   * touched and no third model call is created.
+   */
+  async function addMatchedResultToCart(intent) {
+    const task = String(intent || "").split("\n", 1)[0].toLowerCase();
+    if (!/\b(?:add|put)\b[\s\S]*\b(?:cart|basket|bag)\b/.test(task)) return false;
+    const ignored = new Set(["add", "put", "cart", "basket", "bag", "my", "to", "in", "on", "the", "a", "an", "of", "amazon", "amazonin"]);
+    const terms = (task.match(/[a-z0-9]+/g) || []).filter(word => word.length > 2 && !ignored.has(word));
+    if (!terms.length) return false;
+    const requestedNumbers = terms.filter(word => /^\d+$/.test(word));
+    const buttons = Array.from(document.querySelectorAll(
+      "button,input[type='submit'],input[type='button'],[role='button'],a"
+    )).filter(isVisiblePageElement).filter(button => {
+      if (button.disabled || button.getAttribute("aria-disabled") === "true") return false;
+      const label = [elementText(button), button.getAttribute("aria-label"), button.getAttribute("title"), button.value]
+        .filter(Boolean).join(" ").toLowerCase();
+      return /add\s*(to)?\s*(cart|basket|bag)/i.test(label);
+    });
+    const scored = buttons.map(button => {
+      // Result cards vary across shops. Prefer semantic product containers,
+      // then use the smallest nearby ancestor with substantial product text.
+      const card = button.closest("[data-component-type='s-search-result'], [data-asin], article, li, [role='listitem']") || button.parentElement;
+      const cardText = (card?.innerText || "").toLowerCase();
+      const score = terms.reduce((total, term) => total + (cardText.includes(term) ? 1 : 0), 0);
+      const hasRequestedNumbers = requestedNumbers.every(number => new RegExp(`\\b${number}\\b`).test(cardText));
+      return { button, score, hasRequestedNumbers };
+    }).sort((a, b) => b.score - a.score);
+    const best = scored[0];
+    // Require two independent product words (e.g. sony + bravia), avoiding a
+    // random recommended item whose only match is the generic word "tv".
+    if (!best || best.score < Math.min(2, terms.length) ||
+      (scored[1] && best.score === scored[1].score)) return false;
+    best.button.setAttribute("data-vpba-cart-fallback", "true");
+    try {
+      await doClick({ target: { selector: '[data-vpba-cart-fallback="true"]' } });
+      return true;
+    } catch (_) {
+      return false;
+    } finally {
+      best.button.removeAttribute("data-vpba-cart-fallback");
+    }
   }
 
   // ── Task execution with live progress ─────────────────────────────────────
@@ -1518,6 +1657,8 @@
         if (!Array.isArray(next.tasks?.tasks) || !next.tasks.tasks.length) {
           if (await clickYoutubeFinalResult(saved.intent)) {
             handle.set(`<div class="vans">Opened the best matching YouTube video.</div>`);
+          } else if (await addMatchedResultToCart(saved.intent)) {
+            handle.set(`<div class="vans">Added the visible matching item to the cart.</div>`);
           } else {
             handle.set(`<div class="verr">${esc(next.tasks?.answer || "The next page did not provide an executable continuation.")}</div>`);
           }

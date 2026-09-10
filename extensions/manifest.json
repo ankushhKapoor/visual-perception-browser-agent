@@ -27,9 +27,9 @@
         "file:///*"
       ],
       "js": [
+        "extensions/src/content.js",
         "extensions/src/chatbot.js",
-        "extensions/src/executor.js",
-        "extensions/src/content.js"
+        "extensions/src/executor.js"
       ],
       "run_at": "document_idle"
     }

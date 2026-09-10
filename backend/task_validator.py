@@ -23,6 +23,7 @@ VALID_ACTIONS = {
     "clear",
     "drag",
     "opentab",
+    "closetabs",
     "screenshot",
 }
 
@@ -109,5 +110,29 @@ def validate_tasks_response(data: Any) -> dict[str, Any]:
             raise TaskValidationError(
                 f"Task {i} (step {step}): 'opentab' action requires 'url'"
             )
+
+        if action == "closetabs" and task.get("scope", "all_except_current") not in {
+            "all_except_current", "all_unpinned_except_current", "tab_numbers", "tab_range",
+        }:
+            raise TaskValidationError(
+                f"Task {i} (step {step}): invalid closetabs scope"
+            )
+        if action == "closetabs" and task.get("scope") == "tab_numbers":
+            numbers = task.get("tab_numbers")
+            if not isinstance(numbers, list) or not numbers or any(
+                not isinstance(number, int) or number < 1 for number in numbers
+            ):
+                raise TaskValidationError(
+                    f"Task {i} (step {step}): tab_numbers must be positive integers"
+                )
+        if action == "closetabs" and task.get("scope") == "tab_range":
+            tab_range = task.get("tab_range")
+            if not isinstance(tab_range, dict) or any(
+                not isinstance(tab_range.get(key), int) or tab_range[key] < 1
+                for key in ("start", "end")
+            ):
+                raise TaskValidationError(
+                    f"Task {i} (step {step}): tab_range must contain positive start/end"
+                )
 
     return data

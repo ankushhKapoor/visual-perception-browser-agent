@@ -188,18 +188,92 @@ def normalize_direct_search_first_phase(tasks: dict[str, Any], request: "AgentRe
     if not query:
         return tasks
     action = "opentab" if re.search(r"\bnew\s+tab\b", intent, re.I) else "navigate"
+    # A plain "search/find X on Amazon" request ends at the results page.
+    # Reserving a second call in that case creates a fake continuation and the
+    # UI reports an error even though the requested search already succeeded.
+    # Only require fresh result-page planning when the user asked to act on a
+    # particular result (play/open/add/buy/compare/etc.).
+    first_line = intent.split("\n", 1)[0]
+    needs_result_action = bool(media) or bool(re.search(
+        r"\b(?:click|play|watch|listen|add|put|buy|purchase|cart|basket|bag|compare|select|details?|review)\b",
+        first_line, re.I,
+    )) or bool(re.search(
+        r"\bopen\s+(?!a?\s*new\s+tab\b)(?!.*\bsearch\b)", first_line, re.I,
+    ))
     return {
         **tasks,
         "type": "tasks",
         "answer": "",
-        "task_complete": False,
-        "reasoning": "Open direct search results, then select the matching final result from fresh page context.",
+        "task_complete": not needs_result_action,
+        "reasoning": (
+            "Open direct search results, then select the matching final result from fresh page context."
+            if needs_result_action else
+            "Open the requested direct search results."
+        ),
         "tasks": [{
             "step": 1,
             "action": action,
             "url": routes[site](query),
             "description": f"Open {site.title()} search results for '{query}'",
         }],
+    }
+
+
+def normalize_browser_tab_management(tasks: dict[str, Any], request: "AgentRequest") -> dict[str, Any]:
+    """Turn explicit browser tab commands into a Chrome Tabs API action.
+
+    This is a general browser-control normalization, independent of any site
+    or webpage DOM. It prevents models trained only for web-page automation
+    from incorrectly claiming that tab actions are unavailable. Only explicit
+    close/remove commands are accepted; ordinary mentions of a page's "tabs"
+    are left to the model.
+    """
+    intent = request.task_intent.split("\n", 1)[0].lower()
+    if not re.search(r"\b(?:close|remove|delete)\b", intent) or not re.search(r"\btabs?\b", intent):
+        return tasks
+
+    scope: str | None = None
+    payload: dict[str, Any] = {}
+    description = ""
+    if re.search(r"\b(?:all|other|rest|remaining)\s+tabs?\b", intent) and re.search(
+        r"\b(?:except|but|keep|retain|leave)\b.*\b(?:current|this|one)\s+tab\b|\bonly\s+keep\s+(?:this|current|one|\d+)\s+tab\b",
+        intent,
+    ):
+        scope = "all_unpinned_except_current" if "pinned" in intent else "all_except_current"
+        description = "Close the requested other tabs in this window"
+    else:
+        range_match = re.search(r"\btabs?\s+(\d+)\s*(?:to|through|-)\s*(\d+)\b", intent)
+        if range_match:
+            scope = "tab_range"
+            payload["tab_range"] = {"start": int(range_match.group(1)), "end": int(range_match.group(2))}
+            description = f"Close tabs {range_match.group(1)} through {range_match.group(2)}"
+        else:
+            numbers_match = re.search(r"\btabs?\s+((?:\d+\s*(?:,|and|&)?\s*)+)\b", intent)
+            if numbers_match:
+                numbers = sorted({int(value) for value in re.findall(r"\d+", numbers_match.group(1)) if int(value) > 0})
+                if numbers:
+                    scope = "tab_numbers"
+                    payload["tab_numbers"] = numbers
+                    description = "Close tab " + ", ".join(str(number) for number in numbers)
+    if not scope:
+        return tasks
+    return {
+        "taskId": tasks.get("taskId"),
+        "intent": request.task_intent,
+        "type": "tasks",
+        "answer": "",
+        "task_complete": True,
+        "requires_confirmation": False,
+        "requires_screenshot": False,
+        "reasoning": "Execute the explicit browser tab-management command through Chrome's Tabs API.",
+        "tasks": [{
+            "step": 1,
+            "action": "closetabs",
+            "scope": scope,
+            **payload,
+            "description": description,
+        }],
+        "status": "pending",
     }
 
 
@@ -580,6 +654,7 @@ async def agent_task(request: AgentRequest) -> AgentResponse:
 
         try:
             tasks = parse_vlm_output(raw_output, request.task_intent)
+            tasks = normalize_browser_tab_management(tasks, request)
             tasks = normalize_direct_search_first_phase(tasks, request)
             validate_plan_against_current_page(tasks, request)
             log.info(

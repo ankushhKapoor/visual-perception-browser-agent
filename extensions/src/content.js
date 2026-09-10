@@ -2451,6 +2451,16 @@ console.log(
   }
 );
 
+// `chatbot.js` is a separate content-script bundle. Export the redaction
+// pipeline explicitly so it is available in the shared isolated world; raw
+// screenshots remain local until these redactors have completed.
+window.vpbaPrivacy = Object.freeze({
+  extractPageContext,
+  redactScreenshot,
+  createRedactionMap,
+  assertSanitizedScreenshot,
+});
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type !== "START_ON_DEMAND_CAPTURE") {
     return false;

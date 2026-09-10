@@ -424,5 +424,54 @@ chrome.runtime.onMessage.addListener(
       });
       return true;
     }
+
+    if (message.type === "CLOSE_TABS") {
+      const keepTab = sender.tab;
+      if (keepTab?.id == null || keepTab.windowId == null) {
+        sendResponse({ success: false, error: "Cannot determine the current tab" });
+        return false;
+      }
+      const scope = message.scope || "all_except_current";
+      const requestedNumbers = Array.isArray(message.tabNumbers)
+        ? message.tabNumbers.map(Number).filter(Number.isInteger)
+        : [];
+      const range = message.tabRange && typeof message.tabRange === "object"
+        ? { start: Number(message.tabRange.start), end: Number(message.tabRange.end) }
+        : null;
+      chrome.tabs.query({ windowId: keepTab.windowId }, tabs => {
+        if (chrome.runtime.lastError) {
+          sendResponse({ success: false, error: chrome.runtime.lastError.message });
+          return;
+        }
+        // Tab selection is generic and stays in Chrome. The page and model
+        // never receive tab titles or URLs. New scopes can be added here
+        // without changing how content scripts access page data.
+        const removeIds = tabs.filter(tab => {
+          if (scope === "all_except_current") return tab.id !== keepTab.id;
+          if (scope === "all_unpinned_except_current") return tab.id !== keepTab.id && !tab.pinned;
+          // User-facing tab numbers are 1-based and count from the left in
+          // this window. Chrome's tab.index is 0-based, so add one here.
+          if (scope === "tab_numbers") return requestedNumbers.includes(tab.index + 1);
+          if (scope === "tab_range" && range && Number.isInteger(range.start) && Number.isInteger(range.end)) {
+            const start = Math.min(range.start, range.end);
+            const end = Math.max(range.start, range.end);
+            return tab.index + 1 >= start && tab.index + 1 <= end;
+          }
+          return false;
+        }).map(tab => tab.id).filter(id => id != null);
+        if (!removeIds.length) {
+          sendResponse({ success: true, closed: 0 });
+          return;
+        }
+        chrome.tabs.remove(removeIds, () => {
+          if (chrome.runtime.lastError) {
+            sendResponse({ success: false, error: chrome.runtime.lastError.message });
+          } else {
+            sendResponse({ success: true, closed: removeIds.length });
+          }
+        });
+      });
+      return true;
+    }
   }
 );
