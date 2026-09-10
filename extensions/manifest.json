@@ -28,8 +28,7 @@
       ],
       "js": [
         "extensions/src/content.js",
-        "extensions/src/chatbot.js",
-        "extensions/src/executor.js"
+        "extensions/src/chatbot.js"
       ],
       "run_at": "document_idle"
     }

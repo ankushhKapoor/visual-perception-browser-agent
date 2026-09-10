@@ -7,10 +7,6 @@
  * Runs as a content script with direct DOM access.
  */
 
-/* ============================================================
-   Utility helpers
-   ============================================================ */
-
 /**
  * Live element map — populated by chatbot.js during getPageContext().
  * Keyed by "element_N" strings, values are the live DOM nodes.
@@ -131,10 +127,6 @@ async function simulateTyping(element, text) {
   element.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
-/* ============================================================
-   Action executors
-   ============================================================ */
-
 async function executeClick(task) {
   const element = resolveElement(task.target);
   if (!element) {
@@ -241,7 +233,6 @@ async function executeWait(task) {
       if (document.querySelector(task.selector)) return;
       await delay(100);
     }
-    console.warn(`[Executor] Selector '${task.selector}' not found within ${timeoutMs}ms`);
     return;
   }
 
@@ -294,18 +285,11 @@ async function executeScreenshot(_task) {
     chrome.runtime.sendMessage(
       { type: "START_ON_DEMAND_CAPTURE" },
       () => {
-        if (chrome.runtime.lastError) {
-          console.warn("[Executor] Re-capture signal failed:", chrome.runtime.lastError.message);
-        }
         resolve();
       }
     );
   });
 }
-
-/* ============================================================
-   Main task runner
-   ============================================================ */
 
 const ACTION_MAP = {
   click:      executeClick,
@@ -336,11 +320,7 @@ async function executeTasks(tasksJson, onProgress) {
   let completedSteps = 0;
 
   for (const step of steps) {
-    const { action, description } = step;
-    console.log(
-      `[Executor] Step ${step.step}/${total}: ${action} — ${description}`
-    );
-
+    const { action } = step;
     if (typeof onProgress === "function") {
       onProgress(step.step, total, "running");
     }
@@ -348,7 +328,6 @@ async function executeTasks(tasksJson, onProgress) {
     const executor = ACTION_MAP[action];
     if (!executor) {
       const error = `Unknown action '${action}' at step ${step.step}`;
-      console.error("[Executor]", error);
       if (typeof onProgress === "function") onProgress(step.step, total, "error", error);
       return { success: false, completedSteps, error };
     }
@@ -361,7 +340,6 @@ async function executeTasks(tasksJson, onProgress) {
       }
     } catch (err) {
       const errorMsg = err?.message || String(err);
-      console.error(`[Executor] Step ${step.step} failed:`, errorMsg);
       if (typeof onProgress === "function") {
         onProgress(step.step, total, "error", errorMsg);
       }

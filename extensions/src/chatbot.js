@@ -417,7 +417,6 @@
     if (!extensionContextAvailable()) return Promise.resolve(undefined);
     return new Promise(resolve => chrome.storage.session.get(key, value => {
       if (chrome.runtime.lastError) {
-        console.warn("Could not read task continuation:", chrome.runtime.lastError.message);
         return resolve(undefined);
       }
       resolve(value?.[key]);
@@ -712,7 +711,6 @@
       // content.js provides the local redactor. Never fall back to a raw image.
       const privacy = await getPrivacyPipeline();
       if (!privacy) {
-        console.warn("[VPBA] Screenshot omitted: local redaction pipeline unavailable");
         return null;
       }
       const pageContext = privacy.extractPageContext();
@@ -846,7 +844,6 @@
       if (cached && isVisiblePageElement(cached)) return cached;
       const replacement = recoverReplacedElement(target.elementId);
       if (replacement) return replacement;
-      console.warn(`[VPBA] _elMap miss for ${target.elementId}`);
     }
 
     return null;
@@ -920,7 +917,6 @@
       });
     const composeEditor = editors.find(el => el.closest("[role='dialog']")) || editors[0];
     if (composeEditor) {
-      console.warn("[VPBA] Repaired prose target from search control to visible editor");
       return composeEditor;
     }
     return planned;

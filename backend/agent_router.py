@@ -12,12 +12,9 @@ Mounts onto the existing yolo-opencv server.py app.
 """
 
 import base64
-import logging
 import os
 import re
 import time
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 import cv2
@@ -28,8 +25,6 @@ from pydantic import BaseModel, Field
 
 from task_validator import validate_tasks_response, TaskValidationError
 
-
-log = logging.getLogger("agent-router")
 
 # VLM server URL — reachable through the SSH tunnel
 # On the local machine: ssh -N -L 9001:localhost:9001 user@college.machine
@@ -104,14 +99,9 @@ def _apply_pixel_redaction(image_b64: str, redaction_regions: list[dict]) -> str
         _, encoded = cv2.imencode(".png", image)
         return base64.b64encode(encoded.tobytes()).decode("ascii")
 
-    except Exception as exc:
-        log.warning("Server-side pixel redaction failed: %s — using original", exc)
+    except Exception:
         return image_b64
 
-
-# ---------------------------------------------------------------------------
-# Request / Response models
-# ---------------------------------------------------------------------------
 
 class AgentTaskRequest(BaseModel):
     """Payload from the browser extension."""
@@ -173,13 +163,6 @@ async def agent_task(request: AgentTaskRequest) -> AgentTaskResponse:
             detail="Privacy gate: raw PII detected in perception state",
         )
 
-    log.info(
-        "Agent task received — intent=%r elements=%d image=%s",
-        request.task_intent[:80],
-        len(request.perception_state.get("interactiveElements", [])),
-        "yes" if request.image_b64 else "no",
-    )
-
     # --- Server-side pixel redaction ---
     safe_image_b64: str | None = None
     if request.image_b64:
@@ -187,20 +170,6 @@ async def agent_task(request: AgentTaskRequest) -> AgentTaskResponse:
             request.image_b64,
             request.redaction_regions,
         )
-        log.info("Server-side pixel redaction applied (%d regions)", len(request.redaction_regions))
-
-        # Save ONLY the screenshot that's actually forwarded to VLM
-        try:
-            ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-            save_dir = Path(__file__).parent.parent / "photos" / "output"
-            save_dir.mkdir(parents=True, exist_ok=True)
-            img_path = save_dir / f"vlm_sent_{ts}.png"
-            with open(img_path, "wb") as _f:
-                _f.write(base64.b64decode(safe_image_b64))
-            log.info("Saved VLM-sent screenshot → %s", img_path.name)
-        except Exception as _exc:
-            log.warning("Could not save VLM screenshot: %s", _exc)
-
     # --- Build VLM payload ---
     vlm_payload = {
         "task_intent": request.task_intent,
@@ -252,7 +221,6 @@ async def agent_task(request: AgentTaskRequest) -> AgentTaskResponse:
     try:
         tasks = validate_tasks_response(vlm_response.get("tasks", {}))
     except TaskValidationError as exc:
-        log.error("Task validation failed: %s", exc)
         return AgentTaskResponse(
             success=False,
             error=f"Task validation error: {exc}",
@@ -261,12 +229,6 @@ async def agent_task(request: AgentTaskRequest) -> AgentTaskResponse:
 
     global _last_tasks
     _last_tasks = tasks
-
-    log.info(
-        "Agent task completed — %d steps, latency=%dms",
-        len(tasks.get("tasks", [])),
-        latency_ms,
-    )
 
     return AgentTaskResponse(
         success=True,

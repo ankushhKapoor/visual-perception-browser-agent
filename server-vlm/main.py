@@ -8,7 +8,6 @@ The local FastAPI backend connects to this server through an SSH tunnel:
     ssh -N -L 9001:localhost:9001 user@college.machine
 """
 
-import logging
 import re
 import time
 from contextlib import asynccontextmanager
@@ -30,13 +29,6 @@ from prompt_builder import (
     compact_perception_state,
 )
 from task_parser import parse_vlm_output, TaskParseError
-
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
-log = logging.getLogger("vlm-server")
 
 
 def validate_plan_against_current_page(tasks: dict[str, Any], request: "AgentRequest") -> None:
@@ -277,10 +269,6 @@ def normalize_browser_tab_management(tasks: dict[str, Any], request: "AgentReque
     }
 
 
-# ---------------------------------------------------------------------------
-# Pydantic models
-# ---------------------------------------------------------------------------
-
 class AgentRequest(BaseModel):
     """Payload sent by the local backend to the VLM server."""
 
@@ -314,10 +302,6 @@ class AgentResponse(BaseModel):
     model: str | None = None
     latency_ms: int | None = None
 
-
-# ---------------------------------------------------------------------------
-# vLLM client
-# ---------------------------------------------------------------------------
 
 _vlm_client: AsyncOpenAI | None = None
 _openai_client: AsyncOpenAI | None = None
@@ -472,42 +456,9 @@ async def generate_model_output(
     raise RuntimeError("MODEL_PROVIDER must be one of: local, openai, gemini")
 
 
-# ---------------------------------------------------------------------------
-# App lifecycle
-# ---------------------------------------------------------------------------
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    log.info(
-        "VLM server starting — provider=%s model=%s",
-        config.provider,
-        config.active_model_name,
-    )
-    # Only local vLLM has a health endpoint to ping.
-    if config.provider != "local":
-        yield
-        log.info("VLM server shutting down")
-        return
-
-    # Warm up: ping vLLM health endpoint
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(
-                config.vllm_base_url.replace("/v1", "/health")
-            )
-            if resp.status_code == 200:
-                log.info("vLLM is healthy")
-            else:
-                log.warning(
-                    "vLLM health check returned %d — proceeding anyway",
-                    resp.status_code,
-                )
-    except Exception as exc:
-        log.warning("vLLM not reachable at startup: %s — will retry on first request", exc)
-
     yield
-
-    log.info("VLM server shutting down")
 
 
 app = FastAPI(
@@ -524,10 +475,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-# ---------------------------------------------------------------------------
-# Endpoints
-# ---------------------------------------------------------------------------
 
 @app.get("/")
 def root():
@@ -591,12 +538,6 @@ async def agent_task(request: AgentRequest) -> AgentResponse:
             detail="Privacy gate: unsanitized payload rejected by VLM server",
         )
 
-    log.info(
-        "Agent request received — intent=%r elements=%d",
-        request.task_intent[:80],
-        len(request.perception_state.get("interactiveElements", [])),
-    )
-
     compact_state, context_budget = compact_perception_state(
         request.perception_state, request.task_intent,
     )
@@ -607,19 +548,11 @@ async def agent_task(request: AgentRequest) -> AgentResponse:
         image_b64=compact_image,
         image_mime_type=image_mime_type,
     )
-    log.info(
-        "Input budget — elements=%d/%d text=%d/%d image=%d/%d bytes",
-        context_budget["elements_sent"], context_budget["elements_available"],
-        context_budget["text_chars_sent"], context_budget["text_chars_available"],
-        image_budget["image_bytes_sent"], image_budget["image_bytes_in"],
-    )
-
     last_error: str = ""
     t_start = time.monotonic()
 
     for attempt in range(config.max_parse_retries + 1):
         if attempt > 0:
-            log.warning("Retry %d/%d after parse failure", attempt, config.max_parse_retries)
             # On retry, append error feedback so VLM corrects itself
             messages.append({
                 "role": "assistant",
@@ -650,18 +583,11 @@ async def agent_task(request: AgentRequest) -> AgentResponse:
 
         latency_ms = int((time.monotonic() - t_start) * 1000)
 
-        log.debug("VLM raw output (attempt %d):\n%s", attempt + 1, raw_output[:800])
-
         try:
             tasks = parse_vlm_output(raw_output, request.task_intent)
             tasks = normalize_browser_tab_management(tasks, request)
             tasks = normalize_direct_search_first_phase(tasks, request)
             validate_plan_against_current_page(tasks, request)
-            log.info(
-                "Tasks parsed successfully — %d steps, latency=%dms",
-                len(tasks.get("tasks", [])),
-                latency_ms,
-            )
             return AgentResponse(
                 success=True,
                 tasks=tasks,
@@ -670,7 +596,6 @@ async def agent_task(request: AgentRequest) -> AgentResponse:
             )
         except TaskParseError as exc:
             last_error = str(exc)
-            log.warning("Parse error (attempt %d): %s", attempt + 1, last_error)
             # This is not malformed JSON that a retry can repair. The browser
             # is already on a results page and has a local, real-element
             # fallback for the final click. Retrying would turn a two-call

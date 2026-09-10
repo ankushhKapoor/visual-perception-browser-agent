@@ -1,8 +1,3 @@
-console.log(
-  "Visual Perception Browser Agent: background service worker started",
-  chrome.runtime.id
-);
-
 const ANALYSIS_API_URL   = "http://127.0.0.1:8000/analyze";
 const PERCEPTION_API_URL = "http://127.0.0.1:8000/perception";
 const AGENT_TASK_API_URL = "http://127.0.0.1:8000/agent/task";
@@ -14,7 +9,7 @@ const captureInProgressTabs = new Set();
 // causes a search or new-tab task to stop after its first phase.
 if (chrome.storage?.session?.setAccessLevel) {
   chrome.storage.session.setAccessLevel({ accessLevel: "TRUSTED_AND_UNTRUSTED_CONTEXTS" })
-    .catch(error => console.warn("Could not enable session continuation storage:", error));
+    .catch(() => {});
 }
 
 // The debugger transport is used only as a local, trusted input device. It
@@ -101,7 +96,7 @@ async function dispatchTrustedInput(tabId, request) {
 // replacement and tab navigation. It is the persistent browser-wide chat UI.
 if (chrome.sidePanel) {
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
-    .catch(error => console.warn("Could not enable native side panel:", error));
+    .catch(() => {});
 }
 
 async function sendImageForAnalysis(dataUrl, redactionRegions, privacyProof) {
@@ -178,13 +173,7 @@ async function sendBrowserPerceptionState(perceptionState) {
 
 chrome.runtime.onMessage.addListener(
   (message, sender, sendResponse) => {
-    console.log(
-      "Background received message:",
-      message.type
-    );
-
     if (message.type === "CAPTURE_SCREENSHOT") {
-      console.log("Capturing one screenshot", { tabId: sender.tab?.id });
       if (!sender.tab?.id) {
         sendResponse({ success: false, error: "Capture requires an active tab" });
         return false;
@@ -204,11 +193,6 @@ chrome.runtime.onMessage.addListener(
         (dataUrl) => {
           if (chrome.runtime.lastError) {
             captureInProgressTabs.delete(sender.tab.id);
-            console.error(
-              "Screenshot capture failed:",
-              chrome.runtime.lastError.message
-            );
-
             sendResponse({
               success: false,
               error: chrome.runtime.lastError.message
@@ -217,15 +201,10 @@ chrome.runtime.onMessage.addListener(
             return;
           }
 
-          console.log(
-            "Background captured screenshot successfully"
-          );
-
           sendResponse({
             success: true,
             screenshot: dataUrl
           });
-          console.log("One screenshot captured", { tabId: sender.tab.id });
           captureInProgressTabs.delete(sender.tab.id);
         }
       );
@@ -251,10 +230,6 @@ chrome.runtime.onMessage.addListener(
       }
       (async () => {
         try {
-          console.log(
-            "Sending sanitized screenshot to FastAPI..."
-          );
-
           const analysis =
             await sendImageForAnalysis(
               message.screenshot,
@@ -262,21 +237,11 @@ chrome.runtime.onMessage.addListener(
               message.privacyProof
             );
 
-          console.log(
-            "Sanitized screenshot analysis completed",
-            analysis?.detection_summary || {}
-          );
-
           sendResponse({
             success: true,
             analysis: analysis
           });
         } catch (error) {
-          console.error(
-            "Sanitized screenshot analysis failed:",
-            error
-          );
-
           sendResponse({
             success: false,
             error: error.message
@@ -297,30 +262,16 @@ chrome.runtime.onMessage.addListener(
       }
       (async () => {
         try {
-          console.log(
-            "Background sending browser perception state to server..."
-          );
-
           const serverResponse =
             await sendBrowserPerceptionState(
               message.perceptionState
             );
-
-          console.log(
-            "Browser perception state sent successfully:",
-            serverResponse
-          );
 
           sendResponse({
             success: true,
             serverResponse: serverResponse
           });
         } catch (error) {
-          console.error(
-            "Browser perception state sending failed:",
-            error
-          );
-
           sendResponse({
             success: false,
             error: error.message
@@ -346,10 +297,6 @@ chrome.runtime.onMessage.addListener(
           const result = await dispatchTrustedInput(sender.tab.id, message.request);
           sendResponse({ success: true, ...result });
         } catch (err) {
-          // A tab can already be attached to DevTools, or enterprise policy can
-          // block debugger access. The content script uses its normal local
-          // interaction fallback in either case.
-          console.warn("Trusted action unavailable:", err?.message || err);
           sendResponse({ success: false, error: err?.message || String(err) });
         }
       })();
@@ -368,7 +315,6 @@ chrome.runtime.onMessage.addListener(
 
       (async () => {
         try {
-          console.log("Sending agent task to local backend...");
           const apiResponse = await fetch(AGENT_TASK_API_URL, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -381,7 +327,6 @@ chrome.runtime.onMessage.addListener(
           }
 
           const result = await apiResponse.json();
-          console.log("Agent task result:", result);
           sendResponse({
             success: true,
             tasks: result.tasks,
@@ -389,7 +334,6 @@ chrome.runtime.onMessage.addListener(
             latency_ms: result.latency_ms,
           });
         } catch (err) {
-          console.error("Agent task failed:", err);
           sendResponse({ success: false, error: err.message });
         }
       })();

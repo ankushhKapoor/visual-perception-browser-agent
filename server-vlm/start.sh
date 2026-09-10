@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# ============================================================
 # College machine startup script
 # Run this on the COLLEGE machine to start vLLM + VLM server
-# ============================================================
 
 set -euo pipefail
 
@@ -29,9 +27,7 @@ SERVER_PORT="${VLM_SERVER_PORT:-9001}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-8192}"
 GPU_UTIL="${GPU_UTIL:-0.88}"
 
-echo "============================================"
 echo "  Visual Browser Agent — Model Server"
-echo "============================================"
 echo "Model          : $MODEL"
 echo "Provider       : $PROVIDER"
 echo "vLLM port      : $VLLM_PORT"

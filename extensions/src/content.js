@@ -2113,12 +2113,12 @@ function captureScreenshot(
   contextRoute
 ) {
   if (isCaptureInProgress) {
-    console.warn("Capture already in progress");
+    
     return;
   }
 
   isCaptureInProgress = true;
-  console.log("Privacy pipeline started", { contextRoute });
+  
 
   try {
     chrome.runtime.sendMessage(
@@ -2131,10 +2131,7 @@ function captureScreenshot(
         chrome.runtime.lastError
       ) {
         isCaptureInProgress = false;
-        console.error(
-          "Could not communicate with background script:",
-          chrome.runtime.lastError.message
-        );
+        
 
         return;
       }
@@ -2143,18 +2140,13 @@ function captureScreenshot(
         !response?.success
       ) {
         isCaptureInProgress = false;
-        console.error(
-          "Screenshot capture failed:",
-          response?.error
-        );
+        
 
         return;
       }
 
       try {
-        console.log(
-          "Screenshot captured successfully"
-        );
+        
 
         const sanitizedScreenshot =
           await redactScreenshot(
@@ -2170,14 +2162,9 @@ function captureScreenshot(
           redactionMap
         );
 
-        console.log(
-          "Screenshot sanitized successfully"
-        );
+        
 
-        console.log(
-          "Sensitive regions redacted:",
-          pageContext.sensitiveElements.length
-        );
+        
 
         const finalPayload =
           createSanitizedPayload(
@@ -2185,50 +2172,15 @@ function captureScreenshot(
             sanitizedScreenshot
           );
 
-        console.log(
-          "FINAL SANITIZED PAYLOAD:"
-        );
+        
 
-        console.log(
-          finalPayload
-        );
+        
 
-        console.log(
-          "Final payload summary:",
-          {
-            domElements:
-              finalPayload.domContext
-                .elements.length,
+        
 
-            interactiveElements:
-              finalPayload.domContext
-                .interactiveElements.length,
+        
 
-            forms:
-              finalPayload.domContext
-                .forms.length,
-
-            redactedRegions:
-              finalPayload.privacy
-                .redactedRegionCount,
-
-            piiDetected:
-              finalPayload.privacy
-                .piiDetected,
-
-            rawScreenshotIncluded:
-              finalPayload.privacy
-                .rawScreenshotIncluded
-          }
-        );
-
-        console.log(
-          "Sanitized payload is ready for Team Member 2"
-        );
-
-        console.log(
-          "Sending sanitized screenshot for analysis..."
-        );
+        
 
         const analysis =
           await sendSanitizedScreenshotForAnalysis(
@@ -2249,13 +2201,9 @@ function captureScreenshot(
             }
           );
 
-        console.log(
-          "LOCAL PERCEPTION ANALYSIS:"
-        );
+        
 
-        console.log(
-          analysis
-        );
+        
 
         const finalLocalPerceptionOutput =
           createFinalLocalPerceptionOutput(
@@ -2263,134 +2211,45 @@ function captureScreenshot(
             analysis
           );
 
-        console.log(
-          "FINAL LOCAL PERCEPTION OUTPUT:"
-        );
+        
 
-        console.log(
-          finalLocalPerceptionOutput
-        );
+        
 
-        console.log(
-          "Final local perception summary:",
-          {
-            domElements:
-              finalLocalPerceptionOutput
-                .domContext
-                .elements.length,
-
-            interactiveElements:
-              finalLocalPerceptionOutput
-                .domContext
-                .interactiveElements.length,
-
-            forms:
-              finalLocalPerceptionOutput
-                .domContext
-                .forms.length,
-
-            objects:
-              finalLocalPerceptionOutput
-                .visualContext
-                .objects.length,
-
-            visualRegions:
-              finalLocalPerceptionOutput
-                .visualContext
-                .regions.length,
-
-            textRegions:
-              finalLocalPerceptionOutput
-                .visualContext
-                .texts.length,
-
-            sensitiveRegions:
-              finalLocalPerceptionOutput
-                .privacy
-                .redactedRegionCount,
-
-            mappingSummary:
-              finalLocalPerceptionOutput
-                .mappingSummary
-          }
-        );
+        
 
         const browserPerceptionState =
           createBrowserPerceptionState(
             finalLocalPerceptionOutput
           );
 
-        console.log(
-          "BROWSER PERCEPTION STATE:"
-        );
+        
 
-        console.log(
-          browserPerceptionState
-        );
+        
 
-        console.log(
-          "BROWSER PERCEPTION STATE JSON:\n" +
-          JSON.stringify(
-            browserPerceptionState,
-            null,
-            2
-          )
-        );
+        
 
-        console.log(
-          "Browser perception state summary:",
-          browserPerceptionState.summary
-        );
+        
 
-        console.log(
-          "Compact browser perception state is ready for Team Member 2"
-        );
+        
 
-        console.log(
-          "Sending browser perception state through background service worker..."
-        );
+        
 
         const serverResponse =
           await sendBrowserPerceptionState(
             browserPerceptionState
           );
 
-        console.log(
-          "Browser perception state sent successfully"
-        );
+        
 
-        console.log(
-          "SERVER RESPONSE:"
-        );
+        
 
-        console.log(
-          serverResponse
-        );
+        
 
-        console.log(
-          "MEMBER 2 COMPLETE OUTPUT:",
-          {
-            route:
-              browserPerceptionState.contextRoute,
-            page:
-              browserPerceptionState.page,
-            summary:
-              browserPerceptionState.summary,
-            privacy:
-              browserPerceptionState.privacy,
-            artifacts:
-              analysis.artifacts || null
-          }
-        );
+        
 
-        console.log(
-          "Sanitized screenshot analysis completed successfully"
-        );
+        
       } catch (error) {
-        console.error(
-          "Local screenshot processing failed:",
-          error.message
-        );
+        
       } finally {
         isCaptureInProgress = false;
         if (captureRequested) {
@@ -2401,7 +2260,7 @@ function captureScreenshot(
     );
   } catch (error) {
     isCaptureInProgress = false;
-    console.warn("Privacy capture stopped:", getRuntimeErrorMessage(error));
+    
   }
 }
 
@@ -2434,22 +2293,12 @@ function requestAutomaticCapture(reason) {
     captureRequested = false;
     const pageContext = extractPageContext();
     const contextRoute = decideContextRoute(pageContext);
-    console.log("Privacy capture requested", { reason });
+    
     captureScreenshot(pageContext, contextRoute);
   }, 250);
 }
 
-console.log(
-  "Visual Perception Agent loaded; waiting for an explicit extension click",
-  {
-    url: sanitizePageUrl(window.location.href),
-    viewport: {
-      width: window.innerWidth,
-      height: window.innerHeight,
-      devicePixelRatio: window.devicePixelRatio
-    }
-  }
-);
+
 
 // `chatbot.js` is a separate content-script bundle. Export the redaction
 // pipeline explicitly so it is available in the shared isolated world; raw
@@ -2466,7 +2315,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
-  console.log("On-demand capture request received");
+  
 
   if (isCaptureInProgress) {
     sendResponse({ success: false, error: "Capture already in progress" });
@@ -2481,12 +2330,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 if (AUTO_CAPTURE_ENABLED) {
   requestAutomaticCapture("page load");
 }
-
-/* ============================================================
-   Agent task handler
-   Triggered by the popup via AGENT_TASK_REQUEST message.
-   Captures perception state + screenshot, posts to /agent/task.
-   ============================================================ */
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "AGENT_TASK_REQUEST") {
@@ -2556,7 +2399,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         sendResponse({ success: true, tasks: agentResponse.tasks, model: agentResponse.model });
       } catch (err) {
-        console.error("[Agent] Task request failed:", err.message);
+        
         sendResponse({ success: false, error: getRuntimeErrorMessage(err) });
       }
     })();
@@ -2569,7 +2412,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     (async () => {
       try {
-        console.log("[Agent] Executing tasks:", tasks?.taskId);
+        
 
         const result = await executeTasks(tasks, (step, totalSteps, status, error) => {
           const stepData = tasks?.tasks?.[step - 1];
