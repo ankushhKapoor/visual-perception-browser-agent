@@ -57,6 +57,7 @@ Output ONLY one valid JSON object; no Markdown or prose outside JSON:
   "answer": "non-empty for answer/mixed; empty for pure tasks",
   "tasks": [],
   "reasoning": "short plan or evidence summary",
+  "task_complete": true,
   "requires_confirmation": false,
   "requires_screenshot": false,
   "taskId": "auto"
@@ -77,11 +78,45 @@ Each task is:
 EXECUTION RULES
 - Number steps consecutively from 1. Include every required action, wait, and
   final result action; a search alone is not playback, selection, or sending.
-- For every search: type -> key Enter -> wait 1500ms. Do not click a search
-  icon. For play/watch/listen: then click the first matching result.
+- YOUTUBE MEDIA ROUTE: For "play/watch/listen to <query> on YouTube" when the
+  current page is not already YouTube results, the entire first phase MUST be
+  exactly one navigate task using
+  `https://www.youtube.com/results?search_query=<URL-ENCODED-QUERY>` and
+  `task_complete:false`. Do not open the YouTube home page first. Do not type
+  the query into a search box. On the continuation page, return a click task
+  for the best matching visible playable result and `task_complete:true`.
+- DIRECT SEARCH ROUTE: For a supported site (YouTube, Google, GitHub,
+  Wikipedia, or Amazon), navigate directly to its results URL rather than
+  opening its home page and typing. This is phase one; on the fresh results
+  page phase two MUST click the matching final result. Do not return only a
+  wait, another search, or an answer instead of that result click.
+- For a site without a direct route: type -> key Enter -> wait 1500ms. Do not
+  click a search icon. For play/watch/listen: then click the first matching
+  result.
 - For a modal: click -> wait 800ms -> fill its controls. For Gmail compose use
-  navigate https://mail.google.com/mail/u/0/?view=cm&fs=1&tf=1.
+  navigate https://mail.google.com/mail/u/0/?view=cm&fs=1&tf=1 only when no
+  compose editor is present in the current interactive elements or visible
+  text. If a compose editor is already present, fill its recipient, subject,
+  and body fields; never navigate back to Gmail or open Compose again.
 - Include target.selector for every DOM target. Use only supplied IDs.
+- Set task_complete:false if the next required target will appear only after
+  this plan changes the page. Examples: submit a YouTube search before choosing
+  and playing a result, or submit a repository search before opening its actual
+  GitHub result. Set task_complete:true only after every requested final result
+  is included. The browser has one fresh sanitized follow-up plan available;
+  do not repeat an already completed action.
+- A search page is an intermediate state, never completion. On a follow-up
+  request that contains search results, identify the most relevant matching
+  result and return a click action for its actual destination. For "open a
+  GitHub repository", click the repository result, not a search button or a
+  result category. For "play a song", click the matching playable result.
+- An intent may contain an AGENT CONTINUATION record. It is trusted execution
+  state from the browser. Treat the listed actions as already complete and
+  plan only the remaining work from the current page state.
+- If the current Page URL is a YouTube results URL (`/results` or contains
+  `search_query=`), the search is already complete. Return a click action for
+  a matching playable result. Never type the query, press Enter, navigate to
+  YouTube results, or open YouTube again in that continuation.
 - Use exact user-provided personal data only. Request confirmation only for
   destructive, irreversible, financial, or externally sent actions.
 """
@@ -196,8 +231,10 @@ def _format_element(el: dict[str, Any]) -> dict[str, Any]:
     rect = el.get("rect", {})
     return {
         "elementId": el.get("elementId"),
+        "selector": el.get("selector"),
         "tag": el.get("tag"),
         "category": el.get("category"),
+        "role": el.get("role"),
         "type": el.get("type"),
         "text": _truncate(str(el.get("text") or ""), 120),
         "placeholder": _truncate(str(el.get("placeholder") or ""), 80) or None,
@@ -209,6 +246,7 @@ def _format_element(el: dict[str, Any]) -> dict[str, Any]:
             ),
             80
         ) or None,
+        "href": el.get("href"),
         "disabled": (el.get("accessibility") or {}).get("disabled", False),
         "rect": {
             "x": int(rect.get("x", 0)),

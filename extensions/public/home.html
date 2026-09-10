@@ -8,7 +8,7 @@
     :root { color-scheme: dark; }
     * { box-sizing: border-box; }
     body { margin: 0; min-height: 100vh; background: #090d13; color: #e6edf3; font: 14px/1.5 system-ui, sans-serif; }
-    main { width: min(760px, calc(100% - 32px)); margin: 0 auto; padding: 48px 0; }
+    main { width: min(760px, calc(100% - 24px)); margin: 0 auto; padding: 22px 0; min-height: 100vh; display: flex; flex-direction: column; }
     h1 { margin: 0; font-size: 24px; }
     p { color: #8b949e; margin: 7px 0 24px; }
     #history { display: flex; flex-direction: column; gap: 12px; }
@@ -16,16 +16,24 @@
     .user { align-self: flex-end; background: linear-gradient(135deg, #7c3aed, #2563eb); }
     .agent { align-self: flex-start; background: #161b22; border: 1px solid #30363d; }
     .empty { border: 1px dashed #30363d; padding: 22px; border-radius: 12px; color: #8b949e; }
-    .note { margin-top: 28px; padding: 12px; border: 1px solid rgba(124,58,237,.35); border-radius: 10px; background: rgba(124,58,237,.08); color: #c4b5fd; }
+    .note { margin-top: 18px; padding: 12px; border: 1px solid rgba(124,58,237,.35); border-radius: 10px; background: rgba(124,58,237,.08); color: #c4b5fd; }
     .agent .vsrc-preview { display: none; }
+    #composer { display: flex; gap: 8px; margin-top: auto; padding-top: 18px; position: sticky; bottom: 0; background: #090d13; }
+    #intent { flex: 1; min-height: 42px; resize: vertical; border: 1px solid #7c3aed; border-radius: 9px; background: #161b22; color: #e6edf3; padding: 10px; font: inherit; }
+    #send { width: 46px; border: 0; border-radius: 9px; background: #7c3aed; color: white; cursor: pointer; font-size: 18px; }
+    #send:disabled, #intent:disabled { opacity: .55; cursor: wait; }
   </style>
 </head>
 <body>
   <main>
     <h1>Visual Agent</h1>
-    <p>Browser-wide conversation history. Each task uses only the sanitized context of the page where it runs.</p>
+    <p>Persistent browser-wide chat. Each task uses only the sanitized context of the active page.</p>
     <section id="history" aria-live="polite"></section>
-    <div class="note">Open any website and use the Visual Agent panel to run a task. Messages will appear here and across all browser tabs.</div>
+    <div class="note">This panel remains open while websites change. Search tasks automatically inspect updated results before selecting the final result.</div>
+    <div id="composer">
+      <textarea id="intent" rows="1" placeholder="Ask anything or describe a task..."></textarea>
+      <button id="send" title="Send task">Send</button>
+    </div>
   </main>
   <script src="home.js"></script>
 </body>

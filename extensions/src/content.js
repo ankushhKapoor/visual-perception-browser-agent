@@ -2406,7 +2406,10 @@ function captureScreenshot(
 }
 
 let isCaptureInProgress = false;
-const AUTO_CAPTURE_ENABLED = true;
+// Capture only after an explicit extension invocation. Automatic capture does
+// not receive Chrome's activeTab grant and is not appropriate for private
+// page observation.
+const AUTO_CAPTURE_ENABLED = false;
 let captureRequested = false;
 let captureTimer = null;
 
@@ -2468,28 +2471,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 if (AUTO_CAPTURE_ENABLED) {
   requestAutomaticCapture("page load");
 }
-
-document.addEventListener("click", () => {
-  requestAutomaticCapture("click");
-}, true);
-
-document.addEventListener("input", () => {
-  requestAutomaticCapture("input");
-}, true);
-
-document.addEventListener("change", () => {
-  requestAutomaticCapture("change");
-}, true);
-
-const pageMutationObserver = new MutationObserver(() => {
-  requestAutomaticCapture("DOM mutation");
-});
-
-pageMutationObserver.observe(document.documentElement, {
-  subtree: true,
-  childList: true,
-  characterData: true
-});
 
 /* ============================================================
    Agent task handler

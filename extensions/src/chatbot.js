@@ -23,6 +23,10 @@
   const MAX_ELEMS = 60;
   const MAX_TEXT  = 3000;
   const MAX_HIST  = 60;
+  // A task may use one plan for the current page and one plan after a page
+  // transition.  Keeping this hard limit local prevents screenshot fallbacks
+  // from silently turning a two-call task into three or four model calls.
+  const MAX_AGENT_CALLS_PER_TASK = 2;
   const BROWSER_HISTORY_KEY = "vpba_browser_history_v1";
   // Both the conversation and panel visibility are browser-wide. A tab-scoped
   // panel flag was unreliable during document replacement because a content
@@ -394,13 +398,22 @@
     });
   }
   function sessionGet(key) {
-    return new Promise(resolve => chrome.storage.session.get(key, value => resolve(value?.[key])));
+    return new Promise(resolve => chrome.storage.session.get(key, value => {
+      if (chrome.runtime.lastError) {
+        console.warn("Could not read task continuation:", chrome.runtime.lastError.message);
+        return resolve(undefined);
+      }
+      resolve(value?.[key]);
+    }));
   }
   function sessionSet(key, value) {
-    return new Promise(resolve => chrome.storage.session.set({ [key]: value }, resolve));
+    return new Promise((resolve, reject) => chrome.storage.session.set({ [key]: value }, () => {
+      if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+      resolve();
+    }));
   }
   function sessionRemove(key) {
-    return new Promise(resolve => chrome.storage.session.remove(key, resolve));
+    return new Promise(resolve => chrome.storage.session.remove(key, () => resolve()));
   }
 
   // ── History storage ──────────────────────────────────────────────────────────
@@ -543,15 +556,6 @@
     return QUESTION_START_RE.test(t) || QUESTION_FULL_RE.test(t);
   }
 
-  function modelNeedsImage(tasks) {
-    if (!tasks) return false;
-    // VLM explicitly requested a screenshot via the new schema field
-    if (tasks.requires_screenshot === true) return true;
-    // Reasoning text signals the model needs visual context to proceed
-    const r = (tasks.reasoning || "").toLowerCase();
-    return /need(s?\s+)?(to\s+)?(see|the\s+screenshot|image|visual|picture)|cannot\s+(see|identify|find|determine\s+visually)|need\s+visual|unclear\s+from\s+text/i.test(r);
-  }
-
   // ── Page context extraction ────────────────────────────────────────────────
   function getPageContext() {
     _elMap.clear(); // reset for this capture session
@@ -574,16 +578,32 @@
     const interactiveEl = allInteractive.map((el, i) => {
       const id = `element_${i + 1}`;
       _elMap.set(id, el); // ←← store live DOM reference
+      // This attribute is a local, ephemeral handle to the exact live node.
+      // It contains no page text and is never used as an identifier outside
+      // the current document.  It gives the model a selector that resolves to
+      // the same real element it was shown, rather than a guessed CSS path.
+      el.setAttribute("data-vpba-element", id);
       const r = el.getBoundingClientRect();
+      let safeHref = null;
+      if (el instanceof HTMLAnchorElement && el.href) {
+        try {
+          const href = new URL(el.href);
+          href.username = ""; href.password = ""; href.search = ""; href.hash = "";
+          safeHref = href.toString();
+        } catch (_) { /* omit malformed hrefs */ }
+      }
       return {
         elementId: id,
+        selector: `[data-vpba-element="${id}"]`,
         tag: el.tagName.toLowerCase(),
         category: { BUTTON:"button", INPUT:"input", TEXTAREA:"textarea",
                     SELECT:"select", A:"link" }[el.tagName] || el.tagName.toLowerCase(),
+        role: el.getAttribute("role") || null,
         type: el.getAttribute("type") || null,
         text: sanitize((el.innerText || el.value || el.textContent || "").trim().slice(0, 120)),
         placeholder: sanitize(el.getAttribute("placeholder") || ""),
         label: sanitize(el.getAttribute("aria-label") || el.getAttribute("title") || ""),
+        href: safeHref,
         disabled: Boolean(el.disabled),
         rect: { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) },
       };
@@ -902,10 +922,68 @@
     await delay(350);
     // A dispatched event alone is not success: a site can ignore it or an
     // overlay can intercept it. Do not report completion without an effect.
-    if (!await observePageEffect(beforeVideoState, async () => {
-      if (!await performTrustedAction("click", el)) simulateClick(el);
-    })) {
+    let trusted = false;
+    const changed = await observePageEffect(beforeVideoState, async () => {
+      trusted = await performTrustedAction("click", el);
+      if (!trusted) simulateClick(el);
+    });
+    // A real CDP click on a link commonly begins a document navigation before
+    // this isolated world can observe a mutation.  It is still a successful
+    // final activation, not a no-op.  CDP has verified the point resolves to
+    // an actual page node in the background worker before reporting success.
+    const isNavigationControl = el instanceof HTMLAnchorElement || el.closest("a[href]");
+    if (!changed && !(trusted && isNavigationControl)) {
       throw new Error("click: no observable page change after activation");
+    }
+  }
+
+  /**
+   * Last-resort completion for a YouTube results continuation when the model
+   * ignores its required final-click instruction. It stays entirely in the
+   * page: choose a visible video title by the user's query and activate that
+   * real element through the normal CDP-backed click path. No page text is
+   * sent anywhere and this never creates another API call.
+   */
+  async function clickYoutubeFinalResult(intent) {
+    let url;
+    try { url = new URL(location.href); } catch (_) { return false; }
+    if (!/(^|\.)youtube\.com$/i.test(url.hostname) || url.pathname !== "/results") return false;
+
+    const firstLine = String(intent || "").split("\n", 1)[0];
+    const match = firstLine.match(/\b(?:play|watch|listen(?:\s+to)?)\s+(.+?)(?:\s+(?:on|in)\s+youtube(?:\s+music)?)?\s*$/i);
+    if (!match) return false;
+    const stopWords = new Set(["play", "watch", "listen", "to", "on", "in", "youtube", "music", "song", "video"]);
+    const terms = (match[1].toLowerCase().match(/[\p{L}\p{N}]+/gu) || [])
+      .filter(term => term.length > 2 && !stopWords.has(term));
+    if (!terms.length) return false;
+
+    const candidates = Array.from(document.querySelectorAll("ytd-video-renderer a#video-title, a#video-title"))
+      .filter(el => !el.closest("#vpba-root"))
+      .filter(el => {
+        const rect = el.getBoundingClientRect();
+        const style = window.getComputedStyle(el);
+        return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+      });
+    const score = el => {
+      const words = (elementText(el).toLowerCase().match(/[\p{L}\p{N}]+/gu) || []);
+      return terms.reduce((total, term) => total + Math.max(...words.map(word => {
+        if (word === term) return 8;
+        if (word.startsWith(term.slice(0, 3)) || term.startsWith(word.slice(0, 3))) return 4;
+        return 0;
+      }), 0), 0);
+    };
+    const best = candidates.map(el => ({ el, score: score(el) }))
+      .sort((a, b) => b.score - a.score)[0];
+    if (!best || best.score === 0) return false;
+
+    best.el.setAttribute("data-vpba-final-result", "true");
+    try {
+      await doClick({ target: { selector: '[data-vpba-final-result="true"]' } });
+      return true;
+    } catch (_) {
+      return false;
+    } finally {
+      best.el.removeAttribute("data-vpba-final-result");
     }
   }
 
@@ -1203,10 +1281,10 @@
     if (!url) throw new Error("opentab: url required");
     return new Promise((resolve, reject) => {
       try {
-        chrome.runtime.sendMessage({ type: "OPEN_NEW_TAB", url }, res => {
+        chrome.runtime.sendMessage({ type: "OPEN_NEW_TAB", url, continuation: task._continuation }, res => {
           if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
           if (!res?.success) return reject(new Error(res?.error || "Could not open tab"));
-          resolve();
+          resolve({ tabId: res.tabId });
         });
       } catch (e) { reject(e); }
     });
@@ -1233,8 +1311,43 @@
     screenshot: async () => {},
   };
 
+  // A search result is not the user's requested final outcome. Some models do
+  // not emit task_complete consistently, so recognize the standard search
+  // sequence as well: an Enter submission with no later result click.
+  function needsFreshResultPlan(tasksJson) {
+    const steps = tasksJson?.tasks || [];
+    if (tasksJson?.task_complete === false) return true;
+    // A direct YouTube/Google results URL is a search phase even when a model
+    // incorrectly labels its one navigation step as complete.
+    const hasResultsNavigation = steps.some(step => {
+      if (!['navigate', 'opentab'].includes(step.action)) return false;
+      const url = String(step.url || '').toLowerCase();
+      return (url.includes('youtube.com/results') && url.includes('search_query=')) ||
+        (url.includes('google.') && url.includes('/search'));
+    });
+    if (hasResultsNavigation && !steps.some(step => ['click', 'dblclick'].includes(step.action))) return true;
+    const submitAt = steps.findIndex(step =>
+      step.action === "key" && String(step.key || step.value || "").toLowerCase() === "enter"
+    );
+    if (submitAt < 0) return false;
+    return !steps.slice(submitAt + 1).some(step =>
+      ["click", "dblclick", "navigate", "opentab"].includes(step.action)
+    );
+  }
+
+  function continuationIntent(originalIntent, completedTasks) {
+    const completed = (completedTasks || [])
+      .map(step => step.description || step.action)
+      .filter(Boolean)
+      .slice(-8)
+      .join("; ");
+    return `${originalIntent}\n\nAGENT CONTINUATION: The browser has already completed: ${completed || "the previous phase"}. ` +
+      "Read the current sanitized page state as the source of truth. Do not repeat, reopen, navigate back, or search again for completed actions. " +
+      "Return only the remaining steps needed to finish the original request.";
+  }
+
   // ── Task execution with live progress ─────────────────────────────────────
-  async function execTasks(tasksJson, onProg) {
+  async function execTasks(tasksJson, onProg, continuation = {}) {
     const steps = tasksJson?.tasks || [];
     if (!steps.length) return { success: true, completedSteps: 0 };
     let done = 0;
@@ -1250,17 +1363,46 @@
         // A document navigation removes this content script. Persist the rest
         // before leaving; the script on the destination page resumes it.
         if (step.action === "navigate") {
-          if (myTabId != null && index + 1 < steps.length) {
+          if (myTabId != null && (index + 1 < steps.length || continuation.replanAfterNavigation)) {
             await sessionSet(`${NAVIGATION_STATE_PREFIX}${myTabId}`, {
-              tasks: steps.slice(index + 1), createdAt: Date.now(), fromUrl: location.href,
+              tasks: steps.slice(index + 1),
+              intent: continuation.intent || "",
+              completed: steps.slice(0, index + 1),
+              replan: Boolean(continuation.replanAfterNavigation),
+              createdAt: Date.now(), fromUrl: location.href,
             });
           }
           window.location.assign(step.url);
           return { success: true, completedSteps: done + 1, navigating: true };
         }
-        await fn(step);
+        // Search submit often performs a normal document navigation (Google)
+        // instead of an SPA update. Save the fresh-page re-plan before Enter,
+        // otherwise this content script disappears before it can click the
+        // actual search result.
+        if (
+          continuation.replanAfterNavigation &&
+          step.action === "key" &&
+          String(step.key || step.value || "").toLowerCase() === "enter" &&
+          myTabId != null
+        ) {
+          await sessionSet(`${NAVIGATION_STATE_PREFIX}${myTabId}`, {
+            tasks: [], intent: continuation.intent || "", replan: true,
+            completed: steps.slice(0, index + 1),
+            createdAt: Date.now(), fromUrl: location.href,
+          });
+        }
+        const executableStep = step.action === "opentab" && continuation.replanAfterNavigation
+          ? { ...step, _continuation: { intent: continuation.intent || "", replan: true } }
+          : step;
+        const actionResult = await fn(executableStep);
         done++;
         onProg(step.step, steps.length, "done");
+        // Opening a new tab also replaces the execution context. Transfer a
+        // required fresh-page plan to the new tab so "open YouTube then play
+        // X" continues from YouTube instead of stopping at the first step.
+        if (step.action === "opentab" && continuation.replanAfterNavigation && actionResult?.tabId != null) {
+          return { success: true, completedSteps: done, navigating: true };
+        }
       } catch (e) {
         onProg(step.step, steps.length, "fail");
         return { success: false, completedSteps: done, error: e.message };
@@ -1275,6 +1417,12 @@
         await delay(140);
       }
     }
+    // If Enter updated an SPA instead of navigating, the caller will re-plan
+    // immediately from the new DOM. Do not leave stale continuation state for
+    // an unrelated future refresh.
+    if (continuation.replanAfterNavigation && myTabId != null) {
+      await sessionRemove(`${NAVIGATION_STATE_PREFIX}${myTabId}`);
+    }
     return { success: true, completedSteps: done };
   }
 
@@ -1284,13 +1432,49 @@
     const saved = await sessionGet(key);
     if (!saved) return;
     await sessionRemove(key); // avoid replaying a plan after a later reload
-    if (!Array.isArray(saved.tasks) || !saved.tasks.length || Date.now() - saved.createdAt > 120000) return;
+    if (Date.now() - saved.createdAt > 120000) return;
+
+    if (saved.replan && saved.intent) {
+      const handle = addAgent(`<div class="vretry">Reading the new page to continue the task...</div>`);
+      setProcessing(true);
+      try {
+        const followUpIntent = continuationIntent(saved.intent, saved.completed);
+        // The second and final result-selection phase always receives fresh
+        // DOM plus a locally redacted image. This applies to every supported
+        // search site, not just YouTube, and avoids a third retry call.
+        const next = await callAgent(followUpIntent, true);
+        if (!Array.isArray(next.tasks?.tasks) || !next.tasks.tasks.length) {
+          if (await clickYoutubeFinalResult(saved.intent)) {
+            handle.set(`<div class="vans">Opened the best matching YouTube video.</div>`);
+          } else {
+            handle.set(`<div class="verr">${esc(next.tasks?.answer || "The next page did not provide an executable continuation.")}</div>`);
+          }
+        } else {
+          renderTasks(handle, next.tasks);
+          handle.save();
+          const result = await execTasks(next.tasks, (s, t, status) => updateStep(s, status, t), {
+            intent: saved.intent, replanAfterNavigation: needsFreshResultPlan(next.tasks),
+          });
+          if (!result.navigating && !result.success) handle.append(`<div class="verr">Stopped: ${esc(result.error || "")}</div>`);
+        }
+      } catch (err) {
+        if (await clickYoutubeFinalResult(saved.intent)) {
+          handle.set(`<div class="vans">Opened the best matching YouTube video.</div>`);
+        } else {
+          handle.set(`<div class="verr">Could not continue: ${esc(err?.message || err)}</div>`);
+        }
+      }
+      setProcessing(false);
+      handle.save();
+      return;
+    }
+    if (!Array.isArray(saved.tasks) || !saved.tasks.length) return;
 
     const handle = addAgent(`<div class="vretry">Continuing the task after navigation…</div>`);
     setProcessing(true);
     renderTasks(handle, { tasks: saved.tasks });
     handle.save();
-    const result = await execTasks({ tasks: saved.tasks }, (s, t, status) => updateStep(s, status, t));
+    const result = await execTasks({ tasks: saved.tasks }, (s, t, status) => updateStep(s, status, t), { intent: saved.intent });
     if (!result.navigating) {
       handle.append(result.success
         ? `<div class="vans" style="margin-top:8px">Remaining steps completed.</div>`
@@ -1343,11 +1527,13 @@
     const handle = addAgent(); // shows thinking dots
     setProcessing(true);
 
-    // First call (smart image: skip screenshot for questions)
+    // Action tasks always include a locally redacted image on their first
+    // call.  The second (and final) call is reserved for fresh page state
+    // after navigation; do not spend an unbounded retry on the same page.
     let result;
     let tries = 1;
     try {
-      result = await callAgent(text, false);
+      result = await callAgent(text, !isQuestion(text));
     } catch (err) {
       const msg = err?.message || String(err);
       const isConn = /connect|fetch|network|tunnel|econnrefused/i.test(msg);
@@ -1364,16 +1550,6 @@
 
     let { tasks } = result;
 
-    // Auto-retry with image if model signals it needs visual context
-    if (!result.hadImage && modelNeedsImage(tasks)) {
-      tries++;
-      handle.set(`<div class="vretry">🔄 Try ${tries}: retrying with screenshot…</div>`);
-      try {
-        const retry = await callAgent(text, true);
-        result = { ...retry, tries };
-        tasks  = retry.tasks;
-      } catch (_) { /* keep first result */ }
-    }
     result.tries = tries;
 
     // Update model label in header
@@ -1417,7 +1593,9 @@
         renderTasks(handle, tasks);
         // The confirmed plan can also navigate away from this document.
         handle.save();
-        const execResult = await execTasks(tasks, (s, t, status) => updateStep(s, status, t));
+        const execResult = await execTasks(tasks, (s, t, status) => updateStep(s, status, t), {
+          intent: text, replanAfterNavigation: needsFreshResultPlan(tasks),
+        });
         appendSourcePill(handle, result);
         setProcessing(false);
         if (!execResult.success) {
@@ -1438,30 +1616,39 @@
     renderTasks(handle, tasks);
     // Preserve the task card before a navigation destroys this document.
     handle.save();
-    let execResult = await execTasks(tasks, (s, t, status) => updateStep(s, status, t));
+    let execResult = await execTasks(tasks, (s, t, status) => updateStep(s, status, t), {
+      intent: text, replanAfterNavigation: needsFreshResultPlan(tasks),
+    });
 
-    // ── Post-execution screenshot fallback ──────────────────────────────────
-    // If execution failed because an element couldn't be resolved, and we
-    // haven't already sent a screenshot, automatically re-call the agent
-    // with a screenshot so it can use visual coordinates as a fallback.
-    if (
-      !execResult.success &&
-      !result.hadImage &&
-      /not found|could not resolve|element not found/i.test(execResult.error || "")
-    ) {
-      tries++;
-      handle.append(`<div class="vretry" style="margin-top:6px">🔄 Element not found — retrying with screenshot (try ${tries})…</div>`);
+    // SPA searches (for example YouTube) do not replace the document. Re-plan
+    // from their fresh DOM only when Gemini explicitly marks the phase
+    // incomplete. One follow-up plus the initial plan is the task-wide API
+    // budget; a further loop would violate the two-call contract.
+    let followUp = 0;
+    while (execResult.success && !execResult.navigating && needsFreshResultPlan(tasks) && followUp < MAX_AGENT_CALLS_PER_TASK - 1) {
+      followUp++;
+      handle.append(`<div class="vretry" style="margin-top:6px">Checking updated results (phase ${followUp + 1}/2)...</div>`);
       try {
-        const retry = await callAgent(text, true /* forceImage */);
-        result = { ...retry, tries };
-        tasks  = retry.tasks;
-        if (Array.isArray(tasks?.tasks) && tasks.tasks.length > 0) {
-          renderTasks(handle, tasks);
-          execResult = await execTasks(tasks, (s, t, status) => updateStep(s, status, t));
+        const followUpIntent = continuationIntent(text, tasks.tasks);
+        const next = await callAgent(followUpIntent, true);
+        result = next;
+        tasks = next.tasks;
+        if (!Array.isArray(tasks?.tasks) || !tasks.tasks.length) {
+          execResult = { success: false, completedSteps: 0, error: tasks?.answer || "Model returned no remaining task." };
+          break;
         }
-      } catch (_retryErr) {
-        /* keep original failure result */
+        renderTasks(handle, tasks);
+        handle.save();
+        execResult = await execTasks(tasks, (s, t, status) => updateStep(s, status, t), {
+          intent: text, replanAfterNavigation: needsFreshResultPlan(tasks),
+        });
+      } catch (err) {
+        execResult = { success: false, completedSteps: 0, error: err?.message || String(err) };
+        break;
       }
+    }
+    if (execResult.success && !execResult.navigating && needsFreshResultPlan(tasks)) {
+      execResult = { success: false, completedSteps: execResult.completedSteps, error: "Task still needs another page change after the two-call limit." };
     }
 
     appendSourcePill(handle, result);
@@ -1481,6 +1668,20 @@
   inp.addEventListener("input", () => {
     inp.style.height = "38px";
     inp.style.height = Math.min(inp.scrollHeight, 110) + "px";
+  });
+
+  // The persistent native side panel delegates execution to this page-bound
+  // agent, which is the only component allowed to read the page DOM.
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message.type !== "VPBA_SIDEPANEL_TASK") return false;
+    if (processing) {
+      sendResponse({ success: false, error: "An agent task is already running." });
+      return false;
+    }
+    inp.value = String(message.text || "");
+    handleSend();
+    sendResponse({ success: true });
+    return false;
   });
 
   // ── Init: load the browser-wide (not per-tab) conversation ───────────────

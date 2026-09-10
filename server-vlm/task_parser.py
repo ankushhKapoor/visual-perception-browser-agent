@@ -221,6 +221,7 @@ def parse_vlm_output(
         "intent":   data.get("intent") or original_intent,
         "type":     response_type,
         "answer":   answer,
+        "task_complete": bool(data.get("task_complete", response_type == "answer")),
         "requires_confirmation": bool(data.get("requires_confirmation", False)),
         "requires_screenshot": requires_screenshot,
         "reasoning": str(data.get("reasoning", "")),

@@ -8,6 +8,15 @@ const PERCEPTION_API_URL = "http://127.0.0.1:8000/perception";
 const AGENT_TASK_API_URL = "http://127.0.0.1:8000/agent/task";
 const captureInProgressTabs = new Set();
 
+// Navigation continuations are intentionally stored in chrome.storage.session
+// so they disappear when the browser session ends. Content scripts run in an
+// untrusted context and cannot read this area by default, which otherwise
+// causes a search or new-tab task to stop after its first phase.
+if (chrome.storage?.session?.setAccessLevel) {
+  chrome.storage.session.setAccessLevel({ accessLevel: "TRUSTED_AND_UNTRUSTED_CONTEXTS" })
+    .catch(error => console.warn("Could not enable session continuation storage:", error));
+}
+
 // The debugger transport is used only as a local, trusted input device. It
 // never returns DOM text, screenshots, cookies, network data, or page JS to
 // the VLM; the existing sanitized perception path remains the sole model input.
@@ -45,6 +54,16 @@ async function dispatchTrustedInput(tabId, request) {
 
   await attachDebugger(tabId);
   try {
+    // Resolve the coordinate through DevTools before injecting input.  This is
+    // intentionally local-only: we return only a boolean node check, never
+    // DOM text, attributes, cookies, console output, or network data.
+    const hit = await sendCdp(tabId, "DOM.getNodeForLocation", {
+      x: Math.round(x), y: Math.round(y), includeUserAgentShadowDOM: true,
+    });
+    if (!hit?.backendNodeId) {
+      throw new Error("No actual page element exists at the requested coordinate");
+    }
+    await sendCdp(tabId, "DOM.describeNode", { backendNodeId: hit.backendNodeId, depth: 0 });
     const click = async () => {
       await sendCdp(tabId, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
       await sendCdp(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
@@ -72,31 +91,18 @@ async function dispatchTrustedInput(tabId, request) {
     } else {
       throw new Error(`Unsupported trusted action '${request.action}'`);
     }
+    return { actualElementVerified: true };
   } finally {
     await detachDebugger(tabId);
   }
 }
 
-chrome.action.onClicked.addListener((tab) => {
-  if (!tab.id) {
-    return;
-  }
-
-  console.log("On-demand capture clicked", { tabId: tab.id });
-
-  chrome.tabs.sendMessage(
-    tab.id,
-    { type: "START_ON_DEMAND_CAPTURE" },
-    () => {
-      if (chrome.runtime.lastError) {
-        console.error(
-          "On-demand capture could not start:",
-          chrome.runtime.lastError.message
-        );
-      }
-    }
-  );
-});
+// Unlike an injected page panel, Chrome's native side panel survives document
+// replacement and tab navigation. It is the persistent browser-wide chat UI.
+if (chrome.sidePanel) {
+  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
+    .catch(error => console.warn("Could not enable native side panel:", error));
+}
 
 async function sendImageForAnalysis(dataUrl, redactionRegions, privacyProof) {
   if (
@@ -337,8 +343,8 @@ chrome.runtime.onMessage.addListener(
       }
       (async () => {
         try {
-          await dispatchTrustedInput(sender.tab.id, message.request);
-          sendResponse({ success: true });
+          const result = await dispatchTrustedInput(sender.tab.id, message.request);
+          sendResponse({ success: true, ...result });
         } catch (err) {
           // A tab can already be attached to DevTools, or enterprise policy can
           // block debugger access. The content script uses its normal local
@@ -397,7 +403,23 @@ chrome.runtime.onMessage.addListener(
         if (chrome.runtime.lastError) {
           sendResponse({ success: false, error: chrome.runtime.lastError.message });
         } else {
-          sendResponse({ success: true, tabId: tab.id });
+          const continuation = message.continuation;
+          if (!continuation?.replan || tab.id == null) {
+            sendResponse({ success: true, tabId: tab.id });
+            return;
+          }
+          chrome.storage.session.set({
+            [`vpba_navigation_resume_${tab.id}`]: {
+              tasks: [], intent: String(continuation.intent || ""), replan: true,
+              createdAt: Date.now(), fromUrl: url,
+            },
+          }, () => {
+            if (chrome.runtime.lastError) {
+              sendResponse({ success: false, error: chrome.runtime.lastError.message });
+            } else {
+              sendResponse({ success: true, tabId: tab.id });
+            }
+          });
         }
       });
       return true;

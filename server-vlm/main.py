@@ -9,9 +9,11 @@ The local FastAPI backend connects to this server through an SSH tunnel:
 """
 
 import logging
+import re
 import time
 from contextlib import asynccontextmanager
 from typing import Any
+from urllib.parse import quote_plus, urlparse
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -35,6 +37,139 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 log = logging.getLogger("vlm-server")
+
+
+def validate_plan_against_current_page(tasks: dict[str, Any], request: "AgentRequest") -> None:
+    """Reject repeated first-phase plans during a browser continuation.
+
+    This is a deterministic safety rail around small VLMs: after the browser
+    has navigated to YouTube results or opened Gmail Compose, asking it to
+    search or open Compose again is always a stale-plan error.
+    """
+    if "AGENT CONTINUATION:" not in request.task_intent:
+        return
+    page = request.perception_state.get("page") or {}
+    url = str(page.get("url") or "")
+    parsed = urlparse(url)
+    actions = tasks.get("tasks") or []
+    action_names = [str(step.get("action") or "") for step in actions]
+    descriptions = " ".join(str(step.get("description") or "") for step in actions).lower()
+
+    is_search_results = (
+        ("youtube.com" in parsed.netloc and parsed.path.startswith("/results")) or
+        ("google." in parsed.netloc and parsed.path.startswith("/search")) or
+        ("github.com" in parsed.netloc and parsed.path.startswith("/search")) or
+        ("wikipedia.org" in parsed.netloc and "search" in parsed.path) or
+        ("amazon." in parsed.netloc and parsed.path.startswith("/s"))
+    )
+    if is_search_results:
+        repeated_search = (
+            "type" in action_names or
+            "key" in action_names or
+            any(action in {"navigate", "opentab"} for action in action_names) or
+            "search" in descriptions
+        )
+        if repeated_search or not any(action in {"click", "dblclick"} for action in action_names):
+            raise TaskParseError(
+                "Continuation is already on a search-results page. Do not search, type, press Enter, or navigate again. "
+                "Return a click or dblclick task for the matching final result on the current page."
+            )
+
+    visible_text = str(
+        (request.perception_state.get("domContext") or {}).get("visibleText")
+        or request.perception_state.get("visibleText") or ""
+    ).lower()
+    composer_present = "mail.google.com" in parsed.netloc and any(
+        marker in visible_text for marker in ("new message", "to recipients", "subject")
+    )
+    if composer_present and any(action in {"navigate", "opentab"} for action in action_names):
+        raise TaskParseError(
+            "Gmail compose editor is already present. Do not navigate or open Compose again; "
+            "return only tasks that fill the visible compose fields."
+        )
+
+
+def normalize_direct_search_first_phase(tasks: dict[str, Any], request: "AgentRequest") -> dict[str, Any]:
+    """Route a search directly to results, reserving call two for the result.
+
+    This is deliberately deterministic rather than a YouTube-only model hint.
+    A home page followed by typing is an avoidable intermediate page on every
+    supported search site.  The browser gets a fresh, sanitized result-page
+    snapshot for the second and final model call, which selects the actual
+    result to open/play.
+    """
+    intent = request.task_intent
+    if "AGENT CONTINUATION:" in intent:
+        return tasks
+    page_url = str((request.perception_state.get("page") or {}).get("url") or "")
+    parsed = urlparse(page_url)
+
+    # Supported direct-search endpoints.  Queries are never guessed from page
+    # data; they come only from the user's request.
+    routes = {
+        "youtube": lambda q: f"https://www.youtube.com/results?search_query={quote_plus(q)}",
+        "google": lambda q: f"https://www.google.com/search?q={quote_plus(q)}",
+        "github": lambda q: f"https://github.com/search?q={quote_plus(q)}&type=repositories",
+        "wikipedia": lambda q: f"https://en.wikipedia.org/w/index.php?search={quote_plus(q)}",
+        "amazon": lambda q: f"https://www.amazon.in/s?k={quote_plus(q)}",
+    }
+    aliases = {"youtube music": "youtube", "yt": "youtube", "wiki": "wikipedia"}
+    lower_intent = intent.split("\n", 1)[0].lower()
+    site = next((name for name in routes if re.search(rf"\b{re.escape(name)}\b", lower_intent)), None)
+    if not site:
+        site = next((mapped for alias, mapped in aliases.items() if alias in lower_intent), None)
+
+    media = re.search(r"\b(play|watch|listen(?:\s+to)?)\s+(.+?)\s*$", intent.split("\n", 1)[0], re.I)
+    explicit = re.search(
+        r"\b(?:search(?:\s+for)?|find|look\s+up|open)\s+(.+?)\s+(?:on|in|at)\s+"
+        r"(youtube(?:\s+music)?|yt|google|github|wikipedia|wiki|amazon)\b", intent.split("\n", 1)[0], re.I,
+    )
+    if media:
+        # Media requests default to YouTube unless the user explicitly chose
+        # another supported source.  This removes the home-page-then-search
+        # phase even for concise requests such as "play khat song".
+        requested_source = re.search(r"\s+(?:on|in)\s+([a-z0-9 .-]+)\s*$", media.group(2), re.I)
+        if requested_source and not site:
+            # Do not silently redirect a request such as "play X on Spotify"
+            # to YouTube. Let the model plan for the source the user named.
+            return tasks
+        site = site or "youtube"
+        query = media.group(2)
+        query = re.sub(r"\s+(?:on|in)\s+youtube(?:\s+music)?\s*$", "", query, flags=re.I)
+    elif explicit:
+        site = aliases.get(explicit.group(2).lower(), explicit.group(2).lower())
+        query = explicit.group(1)
+    else:
+        return tasks
+    if site not in routes:
+        return tasks
+
+    already_on_results = (
+        (site == "youtube" and "youtube.com" in parsed.netloc and parsed.path.startswith("/results")) or
+        (site == "google" and "google." in parsed.netloc and parsed.path.startswith("/search")) or
+        (site == "github" and "github.com" in parsed.netloc and parsed.path.startswith("/search")) or
+        (site == "wikipedia" and "wikipedia.org" in parsed.netloc and "search" in parsed.path) or
+        (site == "amazon" and "amazon." in parsed.netloc and parsed.path.startswith("/s"))
+    )
+    if already_on_results:
+        return tasks
+    query = query.strip(" .,!?\"")
+    if not query:
+        return tasks
+    action = "opentab" if re.search(r"\bnew\s+tab\b", intent, re.I) else "navigate"
+    return {
+        **tasks,
+        "type": "tasks",
+        "answer": "",
+        "task_complete": False,
+        "reasoning": "Open direct search results, then select the matching final result from fresh page context.",
+        "tasks": [{
+            "step": 1,
+            "action": action,
+            "url": routes[site](query),
+            "description": f"Open {site.title()} search results for '{query}'",
+        }],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +247,7 @@ async def generate_gemini_output(
     perception_state: dict[str, Any],
     image_b64: str | None,
     image_mime_type: str,
+    messages: list[dict[str, Any]],
 ) -> str:
     """Call Gemini directly over HTTPS without adding a browser-side SDK."""
     if not config.gemini_api_key:
@@ -133,6 +269,14 @@ async def generate_gemini_output(
         parts.insert(0, {
             "type": "image", "data": image_b64, "mime_type": image_mime_type,
         })
+    # Gemini Interactions does not consume the OpenAI-style `messages` list.
+    # Carry parser/guardrail feedback into its own input explicitly on retry.
+    retry_feedback = next((
+        str(message.get("content")) for message in reversed(messages)
+        if message.get("role") == "user" and "previous response could not" in str(message.get("content"))
+    ), "")
+    if retry_feedback:
+        parts.append({"type": "text", "text": retry_feedback})
 
     url = "https://generativelanguage.googleapis.com/v1beta/interactions"
     payload = {
@@ -218,7 +362,7 @@ async def generate_model_output(
         return completion.choices[0].message.content or ""
 
     if config.provider == "gemini":
-        return await generate_gemini_output(request, perception_state, image_b64, image_mime_type)
+        return await generate_gemini_output(request, perception_state, image_b64, image_mime_type, messages)
 
     raise RuntimeError("MODEL_PROVIDER must be one of: local, openai, gemini")
 
@@ -405,6 +549,8 @@ async def agent_task(request: AgentRequest) -> AgentResponse:
 
         try:
             tasks = parse_vlm_output(raw_output, request.task_intent)
+            tasks = normalize_direct_search_first_phase(tasks, request)
+            validate_plan_against_current_page(tasks, request)
             log.info(
                 "Tasks parsed successfully — %d steps, latency=%dms",
                 len(tasks.get("tasks", [])),
@@ -419,6 +565,17 @@ async def agent_task(request: AgentRequest) -> AgentResponse:
         except TaskParseError as exc:
             last_error = str(exc)
             log.warning("Parse error (attempt %d): %s", attempt + 1, last_error)
+            # This is not malformed JSON that a retry can repair. The browser
+            # is already on a results page and has a local, real-element
+            # fallback for the final click. Retrying would turn a two-call
+            # browser task into three provider calls while repeating the same
+            # stale search plan.
+            if "Continuation is already on a search-results page" in last_error:
+                return AgentResponse(
+                    success=False,
+                    error=last_error,
+                    latency_ms=latency_ms,
+                )
 
     # All retries exhausted
     return AgentResponse(
