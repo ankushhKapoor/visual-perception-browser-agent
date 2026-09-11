@@ -1,859 +1,329 @@
-
-````md
 # Visual Perception Browser Agent
 
-A browser-based visual perception system that combines **webpage DOM information** with **screenshot-based computer vision** to generate structured information about the currently visible browser page.
+Visual Perception Browser Agent is a Chrome Manifest V3 extension with a native Side Panel. It understands a user request, inspects the current website, and executes a constrained browser task plan. Its primary rule is privacy-first:
 
-This project is part of the work for **SIH26171**, focusing on browser perception and visual understanding.
+> Raw screenshots and unredacted page context are not sent to the VLM.
 
----
+The extension creates sanitised text and images **inside the browser first**. Only that sanitised context can reach the separate VLM server. The VLM plans; the extension validates and performs the real browser actions. There is no Python/FastAPI privacy, OCR, face-detection, or screenshot-analysis backend in the active pipeline.
 
-## Overview
+## What we are doing
 
-Webpages contain two important types of information:
+Browser agents need page text, forms, buttons, links, and sometimes screenshots. Those inputs may include names, email addresses, phone numbers, addresses, government IDs, bank details, passwords, faces, and scanned documents.
 
-1. **Structural information**
-   - DOM elements
-   - Buttons
-   - Links
-   - Forms
-   - Input fields
-   - Page metadata
+The project separates the work into two layers:
 
-2. **Visual information**
-   - Text rendered on the screen
-   - Images
-   - Visual regions
-   - Objects
-   - Screen coordinates
+1. **Browser-local perception and privacy**: read visible DOM context, capture a screenshot only when needed, find PII, and construct a sanitised context locally.
+2. **VLM planning and constrained execution**: send only sanitised context to a VLM, validate its JSON response, then let extension code execute allowed actions against the live page.
 
-Using only the DOM may miss information that exists visually.
-
-Using only screenshots may miss important semantic and structural information available in the browser.
-
-This project combines both sources of information to build a structured representation of the current browser state.
-
----
+The visible chat is a Chrome Side Panel, so it reduces website width rather than injecting an overlay over the site. Content scripts run in the webpage to access its live DOM; the Side Panel and service worker use browser-level Chrome APIs.
 
 ## Architecture
 
-```text
-                    ┌─────────────────────┐
-                    │      Webpage        │
-                    └──────────┬──────────┘
-                               │
-                ┌──────────────┴──────────────┐
-                │                             │
-                ▼                             ▼
-       DOM / Browser Context            Screenshot Capture
-                │                             │
-                ▼                             ▼
-       Interactive Elements             Visual Analysis
-       Forms                            ├── OCR
-       Page Information                 ├── Visual Regions
-       Element Metadata                 └── Object Detection
-                │                             │
-                └──────────────┬──────────────┘
-                               │
-                               ▼
-                  Browser Perception State
-                               │
-                               ▼
-                       Local FastAPI Server
-````
+\`\`\`text
+Website tab
+  │
+  ├─ content.js: visible DOM, labels, forms, controls, element rectangles
+  │
+  ├─ local privacy pipeline
+  │   ├─ DOM/label/pattern PII detection
+  │   ├─ MediaPipe faces → pixel coordinates → blur
+  │   ├─ Tesseract OCR → text coordinates → blackout sensitive text
+  │   └─ canvas → sanitised screenshot
+  │
+  ▼
+Sanitised DOM context and, only when needed, sanitised image
+  │
+  ▼
+background.js / Side Panel → VLM server (:9001)
+  │
+  ▼
+Local Qwen via vLLM OR hosted Gemini/OpenAI-compatible provider
+  │
+  ▼
+validated tasks.json
+  │
+  ▼
+Extension executes permitted browser actions on the live website
+\`\`\`
 
----
+## Terminology
 
-# Features
+### PII
 
-## Browser Context Extraction
+**Personally Identifiable Information (PII)** is information that identifies a person directly or can reasonably be linked to one. This project protects, among other categories:
 
-The browser-side component collects useful webpage information, including:
+- full names, including recognised names repeated in unstructured prose;
+- email addresses and phone numbers;
+- residential/postal addresses;
+- date of birth (DOB);
+- Aadhaar/government-ID-like numbers, PAN-like IDs, account/card numbers and CVV;
+- passwords, API tokens, UPI IDs;
+- faces in screenshots and document photographs.
 
-* Current page URL
-* Page title
-* Interactive elements
-* Buttons
-* Links
-* Input fields
-* Forms
-* Element metadata
-* Accessibility-related information
-* Element positions where available
+Not every number is PII. Product IDs, order IDs, quantities, prices, office codes, and similar operational values should remain visible when their surrounding context is non-sensitive.
 
----
+### Redaction, blackout, blur and placeholders
 
-## Screenshot Capture
+**Redaction** means making protected information unavailable before sharing it.
 
-The Chrome Extension captures the currently visible browser tab using the Chrome Tabs API.
+- **Blackout**: an opaque black rectangle covers sensitive text/identifiers.
+- **Blur**: a detected face region is blurred while the rest of the image remains visible.
+- **Placeholders**: sensitive DOM text sent to a model is replaced with category labels such as \`<EMAIL_1>\`, \`<PHONE_1>\`, \`<ADDRESS_1>\`, \`<PERSON_1>\`, \`<UPI_ID_1>\`, and \`<GOVERNMENT_ID_1>\`.
 
-The screenshot can then be processed by the local visual perception backend.
+A placeholder preserves the fact and category of a field without revealing its value.
 
----
+## How the extension understands what to hide
 
-## OCR
+Privacy detection is layered because websites, normal HTML text, scanned documents, and images need different methods.
 
-The visual pipeline extracts text from screenshots.
+### 1. DOM and form-value privacy
 
-This helps identify text that may not be directly available through normal DOM extraction.
+\`extensions/src/content.js\` reads visible text nodes, form values, labels, placeholders, ARIA/accessibility labels, attributes, and nearby value/label context. It applies local JavaScript rules:
 
-OCR results can include:
+1. **Pattern recognition** identifies strong formats: emails, phone numbers, card-like digits, Aadhaar-like 12-digit groups, PAN-like patterns, dates, UPI IDs, tokens, and passwords.
+2. **Field semantics** identify values next to labels such as “Email address”, “Legal name”, “Mobile number”, “Address”, “DOB”, “CVV”, “Password”, “PAN”, “Bank account”, and “API token”.
+3. **Name heuristics and repetition** treat a title-cased two/three-word value in person/document context as a candidate name. Mr/Ms/Dr can help, but is not required. Once identified, matching occurrences in unstructured visible prose are also redacted.
+4. **Address heuristics** group nearby flat/road/locality/village/district/pincode fragments so an entire address is protected rather than one word.
+5. **False-positive controls** use context so the system does not hide every number just because it is numeric.
 
-* Detected text
-* Confidence
-* Bounding boxes
-* Spatial coordinates
+This produces sanitised text and a local redaction map. It does not need a cloud model or GPU.
 
----
+### 2. OCR privacy for screenshots/documents
 
-## Visual Region Detection
+Some information appears inside a scanned ID, canvas, image, or PDF and is not available as useful DOM text. Tesseract.js runs locally to read this visual text.
 
-The screenshot analysis pipeline identifies meaningful visual regions and spatial information.
+OCR produces:
 
-These regions help provide visual context about the webpage.
+- recognised text; and
+- a bounding box: the pixels where that line/word was found.
 
----
+The local classification rules decide whether the recognised line is a government ID, DOB, name, address, phone number, etc. The renderer then draws a black rectangle at the returned coordinates. Therefore OCR tells us both *what it read* and *where it read it*; local privacy logic decides whether it is sensitive.
 
-## Object Detection
+### 3. Face detection and blur
 
-The project includes an OpenCV/YOLO-based visual detection pipeline for detecting objects and visual content.
+The project performs **face detection**, not person identification. It does not determine who a face belongs to.
 
-Detected information can include:
+MediaPipe returns facial landmark coordinates around eyes, nose, mouth, and jaw. The extension calculates a padded rectangle around those coordinates and blurs that rectangle on a browser canvas. It scans bounded visible image tiles as well as the overall screenshot, which helps detect faces in image cards.
 
-* Object label
-* Confidence
-* Bounding box
-* Position
+A BlazeFace short-range face-box detector is an additional fallback. Size, confidence, and face-aspect checks help prevent the previous failure mode of blurring an entire scenery image.
 
----
+### 4. Merge and send
 
-## Browser-side privacy vision
+DOM-sensitive regions, OCR-sensitive regions, and face regions are merged. The raw screenshot is retained only in browser memory for the local canvas operation, then the sanitised canvas and sanitised text are used. The outgoing payload contains a privacy proof/redaction map and never intentionally includes the raw screenshot. The Side Panel preview is sanitised and temporary.
 
-The extension now performs screenshot privacy processing before it communicates
-with a server. `local-vision-privacy.js` uses Transformers.js with ONNX Runtime
-Web (WebGPU when available, WASM otherwise) for local object detection and OCR,
-and MediaPipe Tasks Vision (WASM) for face detection. DOM PII matches and model
-regions are merged, then redacted on a browser canvas. Raw screenshots and OCR
-text never enter a request payload.
+No privacy system is perfect: tiny text, low quality documents, unusual layouts/languages, and extreme face poses can reduce accuracy. The design uses overlapping safeguards rather than trusting one detector.
 
-The first use downloads the public model assets to the browser cache; inference
-itself remains local. FastAPI's OpenCV redaction remains enabled as a
-defence-in-depth alternative for an already-sanitized image.
+## Models and local runtimes
 
----
+| Purpose | Current component | Why it is used |
+|---|---|---|
+| Face landmarks | MediaPipe Face Landmarker Lite, \`face_landmarker.task\` | Runs locally in browser and returns accurate face coordinates for targeted blur. It is lighter than a general visual model. |
+| Face fallback | BlazeFace short range, \`blaze_face_short_range.tflite\` | Adds small face-box detection for clear portraits missed by landmark detection. |
+| OCR engine | Tesseract.js | Runs locally, supports OCR text boxes/coordinates needed to place blackouts. |
+| OCR languages | English + Hindi \`tessdata_best\` | Supports normal English pages and Indian document content; “best” data is larger but selected for better OCR quality. |
+| HTML/web text | DOM semantics + local rules | Labels, attributes and strict value formats are quick, explainable and effective for sensitive form fields. |
 
-## Browser Perception State
+### Why not a general model for every privacy decision?
 
-The browser and visual information are combined into a structured perception state.
+A large visual or language model adds download size, RAM, latency, and false positives. It also does not automatically give safe, accurate screenshot pixel coordinates. MediaPipe gives face coordinates; Tesseract gives OCR coordinates; DOM context gives labels and values. Those outputs directly support targeted blur/blackout.
 
-The state can contain information such as:
+The active browser pipeline does **not** use Transformers.js, ONNX Runtime Web, YOLO, or a WebGPU inference model. Older notes/experiments may mention them, but they are not current extension dependencies.
 
-```json
+## What are WebAssembly, WebGPU, ONNX, and Transformers.js?
+
+| Term | What it is | Current project use |
+|---|---|---|
+| **WebAssembly (WASM)** | Portable binary code that runs efficiently in browsers. | Used by MediaPipe Tasks Vision and Tesseract.js for local CPU inference. |
+| **WebGPU** | Browser API for GPU compute and graphics. | Not required by the active privacy pipeline. Chrome may use GPU for normal rendering. |
+| **ONNX** | Machine-learning model interchange format commonly used by ONNX Runtime. | Not used in the active browser pipeline. |
+| **Transformers.js** | JavaScript library for running transformer models in the browser, commonly via ONNX Runtime. | Not used in the active browser pipeline. It may be evaluated later for optional local named-entity recognition. |
+| **TFLite** | Lightweight TensorFlow model format. | Used by the BlazeFace fallback asset via MediaPipe. |
+
+These are formats/runtimes, not privacy models by themselves.
+
+## Local Qwen trials and Gemini planning
+
+The VLM understands user intent and creates a browser task plan. It does not directly click or execute arbitrary code.
+
+We tried local Qwen-family vision models in the 3B and 7B range (some early work referred to “Qwen 3.5”). They were useful for local/private experimentation but did not give sufficiently consistent visual grounding, browser planning, and task-following quality for the required workflows. Local \`Qwen/Qwen2.5-VL-3B-Instruct\` through vLLM remains supported when a local deployment is required.
+
+For better planning quality, the hosted configuration uses Gemini when selected. Provider credentials remain in \`server-vlm/.env\` or server environment variables, never in extension JavaScript or webpage content. Hosted providers receive the same sanitised payload policy as local providers.
+
+\`\`\`env
+# server-vlm/.env — do not commit API keys
+MODEL_PROVIDER=gemini       # local, gemini, or openai
+GEMINI_API_KEY=...
+GEMINI_MODEL=gemini-3.6-flash
+VLM_SERVER_PORT=9001
+\`\`\`
+
+## Do we send text, image, or both?
+
+The agent does not always send an image.
+
+1. **Question/answer requests start text-first.** The VLM gets sanitised visible text, metadata, forms, and interactive elements but no screenshot by default.
+2. **Action requests usually use sanitised DOM context plus a sanitised image.** Visual grounding is useful when locating an on-screen control or understanding a changed UI.
+3. **Navigation/dynamic updates** produce fresh sanitised context for the continuation so the model does not plan against stale page elements.
+4. Before an image can leave the browser, local privacy processing completes. The server then limits the already-sanitised image size (default maximum side 1024 px, JPEG quality 75) before provider upload.
+
+The decision is based on request type and visual grounding needs, not an assumption that every prompt needs a screenshot.
+
+## tasks.json: plan, not executable code
+
+The VLM returns JSON. \`server-vlm/task_parser.py\` extracts and validates it before the browser receives it. Arbitrary JavaScript, shell commands, and unrestricted browser instructions are not executed.
+
+\`\`\`json
 {
-  "page": {},
-  "interactiveElements": [],
-  "forms": [],
-  "visualText": [],
-  "visualRegions": [],
-  "objects": [],
-  "privacy": {},
-  "summary": {}
+  \"taskId\": \"ab12cd34\",
+  \"intent\": \"Run the visible C program\",
+  \"type\": \"tasks\",
+  \"answer\": \"\",
+  \"task_complete\": false,
+  \"requires_confirmation\": false,
+  \"requires_screenshot\": false,
+  \"reasoning\": \"The Run control is visible.\",
+  \"status\": \"pending\",
+  \"tasks\": [
+    {
+      \"step\": 1,
+      \"action\": \"click\",
+      \"description\": \"Click the Run button\",
+      \"target\": {
+        \"elementId\": \"element_7\",
+        \"selector\": \"button.run\",
+        \"rect\": { \"x\": 430, \"y\": 110, \"width\": 110, \"height\": 36 }
+      }
+    }
+  ]
 }
-```
+\`\`\`
 
-This structured output can be used by downstream components for further reasoning or browser automation.
+Possible outcomes:
 
----
+| Outcome | Meaning |
+|---|---|
+| \`answer\` | A text answer; no browser action needed. |
+| \`tasks\` | One or more browser actions were planned. |
+| \`mixed\` | Text answer and task list both present. |
+| \`requires_confirmation\` | UI asks user approval before execution. |
+| \`requires_screenshot\` | More visual context is requested rather than guessing. |
+| invalid output | Parser rejects malformed or unsupported output. |
 
-# Project Structure
+Allowed actions are: \`click\`, \`dblclick\`, \`rightclick\`, \`type\`, \`key\`, \`select\`, \`scroll\`, \`wait\`, \`navigate\`, \`hover\`, \`focus\`, \`clear\`, \`drag\`, \`opentab\`, \`closetabs\`, and \`screenshot\`.
 
-```text
-visual-perception-browser-agent/
-│
-├── extensions/
-│   │
-│   ├── manifest.json
-│   │
-│   └── src/
-│       ├── background.js
-│       └── content.js
-│
-├── benchmarks/
-│   ├── results/
-│   │   └── .gitkeep
-│   │
-│   └── screenshots/
-│       └── .gitkeep
-│
-├── yolo-opencv/
-│   ├── combined_detect.py
-│   ├── detect.py
-│   ├── opencv_detect.py
-│   └── server.py
-│
-├── .gitignore
-├── README.md
-└── requirements.txt
-```
+The local executor in \`extensions/src/chatbot.js\` resolves element IDs/selectors/coordinates against the current DOM, executes one allowed action at a time, waits for updates, and updates status in the Side Panel. It can persist state before navigation and re-plan from the destination page. A call budget prevents uncontrolled loops.
 
----
+## End-to-end workflow
 
-# Components
+\`\`\`text
+User message in Side Panel
+  → classify request: question or browser action
+  → collect sanitised DOM context
+  → if needed, capture screenshot locally
+  → run DOM/OCR/face privacy redaction
+  → send only sanitised payload to server
+  → VLM returns answer / tasks / mixed / confirmation request
+  → server validates tasks.json
+  → extension executes allowed steps one by one
+  → navigation/update: fresh sanitised context if continuation is needed
+  → show complete, failed, stopped, or approval-needed status
+\`\`\`
 
-## Chrome Extension
+## The Chrome manifest and permissions
 
-The browser extension is responsible for interacting with the active webpage.
+\`extensions/manifest.json\` is the extension **manifest**: Chrome’s required configuration file. It declares name/version, scripts, permissions, model assets, the Side Panel, and Content Security Policy.
 
-### `extensions/manifest.json`
+Key declarations:
 
-Defines the Chrome Extension configuration.
+- **Manifest V3**: modern Chrome extension platform.
+- **Background service worker**: browser-level routing, screenshot capture, Side Panel support, and Chrome tab actions.
+- **Content scripts**: page-local DOM extraction and validated task execution.
+- **Permissions**: \`activeTab\`, \`tabs\`, \`scripting\`, \`storage\`, \`sidePanel\`, and \`debugger\`.
+- **Host permissions**: website access and connection to the configured local/VLM endpoint.
+- **Web-accessible resources**: bundled MediaPipe, Tesseract and model assets.
+- **\`wasm-unsafe-eval\`**: allows bundled WebAssembly runtimes to initialise in extension pages; it does not let websites execute arbitrary extension code.
 
-The project uses:
+Review permissions before installing. A general browser agent needs broad website access; production deployments should narrow that scope where possible.
 
-* Manifest Version 3
-* Background service worker
-* Content scripts
-* Required browser permissions
+## Resource use and GPU requirements
 
----
+The current unpacked build is about **95 MB**, mainly because local privacy assets are bundled:
 
-### `extensions/src/content.js`
+| Component | Approximate disk size |
+|---|---:|
+| MediaPipe WASM runtime | 34 MB |
+| Tesseract OCR runtime | 30 MB |
+| English + Hindi high-accuracy OCR data | 27 MB |
+| Face models | 3.9 MB |
 
-The content script runs in the webpage context.
+At idle the extension should use little CPU. During a privacy scan, OCR initialisation, screenshot canvas buffers, and face-image tiles temporarily increase CPU/RAM. Exact peak use depends on display resolution, image count, page complexity, and other Chrome tabs.
 
-Its responsibilities include:
+- **GPU for browser privacy:** not necessary. The active OCR/face pipeline runs via WASM on CPU.
+- **GPU for local Qwen/vLLM:** recommended for useful local VLM speed; this is a server-side requirement, not an extension requirement.
+- **Hosted Gemini/OpenAI:** no local VLM GPU required; server network access and API credentials are required.
 
-* Collecting webpage information
-* Extracting relevant DOM context
-* Identifying interactive elements
-* Extracting form-related information
-* Communicating with the background service worker
-* Building browser perception information
+## Installation
 
----
+### Prerequisites
 
-### `extensions/src/background.js`
+- Chrome/Chromium with Side Panel support;
+- Node.js/npm to build from source;
+- Python 3.10+ only when self-hosting the separate `server-vlm` service;
+- local vLLM/Qwen or hosted Gemini/OpenAI-compatible provider credentials.
 
-The background service worker handles browser-level operations.
+The local privacy scan works without a GPU. Agent chat/task planning requires the running \`server-vlm\` endpoint (or an equivalent deployment).
 
-Its responsibilities include:
+### Build/load extension
 
-* Receiving messages from the content script
-* Capturing visible browser screenshots
-* Sending screenshots to the backend
-* Sending sanitized screenshots when required
-* Sending browser perception information to the server
+\`\`\`bash
+npm install
+npm run build
+\`\`\`
 
----
+Open \`chrome://extensions\`, enable **Developer mode**, click **Load unpacked**, and choose \`dist/\`.
 
-# Visual Perception Backend
+### Run the separate VLM service (only if self-hosting)
 
-The visual analysis code is located in:
-
-```text
-yolo-opencv/
-```
-
----
-
-## `combined_detect.py`
-
-This file provides the combined visual analysis pipeline.
-
-It is responsible for processing an image and generating structured visual information.
-
-The analysis can include:
-
-* OCR
-* Text detection
-* Bounding boxes
-* Visual regions
-* Object detection
-* Image metadata
-
----
-
-## `detect.py`
-
-Contains detection-related functionality for the visual processing pipeline.
-
----
-
-## `opencv_detect.py`
-
-Contains OpenCV-based image processing and detection functionality.
-
----
-
-## `server.py`
-
-Runs the FastAPI backend.
-
-The server provides endpoints for:
-
-* Checking server health
-* Receiving images for visual analysis
-* Receiving browser perception information
-
----
-
-# API Endpoints
-
-## Root
-
-```http
-GET /
-```
-
-Returns basic information about the API service.
-
----
-
-## Health Check
-
-```http
-GET /health
-```
-
-Example response:
-
-```json
-{
-  "status": "healthy"
-}
-```
-
----
-
-## Screenshot Analysis
-
-```http
-POST /analyze
-```
-
-Accepts an image through multipart form data.
-
-### Input
-
-```text
-image
-```
-
-### Processing Flow
-
-```text
-Screenshot
-    │
-    ▼
-POST /analyze
-    │
-    ▼
-FastAPI Server
-    │
-    ▼
-combined_detect.py
-    │
-    ├── OCR
-    ├── Visual Detection
-    ├── Object Detection
-    └── Bounding Box Processing
-    │
-    ▼
-Structured JSON Result
-```
-
----
-
-## Browser Perception
-
-```http
-POST /perception
-```
-
-Receives the structured browser perception state.
-
-The received information may include:
-
-* Page information
-* Interactive elements
-* Forms
-* Visual text
-* Visual regions
-* Objects
-* Privacy metadata
-* Summary information
-
----
-
-# Message Flow
-
-The extension communicates internally using Chrome runtime messages.
-
-The implemented message flow includes:
-
----
-
-## Capture Screenshot
-
-```text
-content.js
-    │
-    │ CAPTURE_SCREENSHOT
-    ▼
-background.js
-    │
-    ▼
-chrome.tabs.captureVisibleTab()
-    │
-    ▼
-Screenshot
-```
-
----
-
-## Capture and Analyze
-
-```text
-content.js
-    │
-    │ CAPTURE_AND_ANALYZE
-    ▼
-background.js
-    │
-    ▼
-Capture Screenshot
-    │
-    ▼
-POST /analyze
-    │
-    ▼
-Visual Analysis
-```
-
----
-
-## Send Sanitized Screenshot
-
-```text
-SEND_SANITIZED_FOR_ANALYSIS
-```
-
-This message is used to send a sanitized screenshot to the visual analysis backend when integrated with the privacy-processing flow.
-
----
-
-## Send Browser Perception State
-
-```text
-SEND_BROWSER_PERCEPTION
-```
-
-The structured perception state is sent to:
-
-```text
-POST /perception
-```
-
----
-
-# Complete Workflow
-
-```text
-┌─────────────────────┐
-│   User Opens Page   │
-└──────────┬──────────┘
-           │
-           ▼
-┌─────────────────────┐
-│    content.js       │
-│                     │
-│ Extract Browser     │
-│ Context             │
-└──────────┬──────────┘
-           │
-           ▼
-┌─────────────────────┐
-│   background.js     │
-│                     │
-│ Capture Screenshot  │
-└──────────┬──────────┘
-           │
-           ▼
-┌─────────────────────┐
-│   FastAPI Backend   │
-│                     │
-│    POST /analyze    │
-└──────────┬──────────┘
-           │
-           ▼
-┌─────────────────────┐
-│ Visual Perception   │
-│                     │
-│ • OCR               │
-│ • Regions           │
-│ • Objects           │
-│ • Bounding Boxes    │
-└──────────┬──────────┘
-           │
-           ▼
-┌─────────────────────┐
-│ Structured Visual   │
-│ Information         │
-└──────────┬──────────┘
-           │
-           ▼
-┌─────────────────────┐
-│ Browser Perception  │
-│ State               │
-└──────────┬──────────┘
-           │
-           ▼
-┌─────────────────────┐
-│ POST /perception    │
-└─────────────────────┘
-```
-
----
-
-# Installation
-
-## Prerequisites
-
-Make sure the following are installed:
-
-* Python
-* Google Chrome or another Chromium-based browser
-* Git
-
----
-
-## Clone the Repository
-
-```bash
-git clone <repository-url>
-cd visual-perception-browser-agent
-```
-
----
-
-## Create a Virtual Environment
-
-### Windows
-
-```powershell
+\`\`\`bash
+cd server-vlm
 python -m venv .venv
-.venv\Scripts\activate
-```
-
-### Linux/macOS
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-```
-
----
-
-## Install Dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
----
-
-# Running the Backend
-
-Navigate to the backend directory:
-
-```powershell
-cd yolo-opencv
-```
-
-Run:
-
-```powershell
-python server.py
-```
-
-Alternatively, depending on the FastAPI configuration:
-
-```powershell
-uvicorn server:app --reload
-```
-
-The server is expected to run locally on:
-
-```text
-http://127.0.0.1:8000
-```
-
----
-
-# Checking the Backend
-
-Open:
-
-```text
-http://127.0.0.1:8000/health
-```
-
-Expected response:
-
-```json
-{
-  "status": "healthy"
-}
-```
-
----
-
-# Loading the Chrome Extension
-
-## Step 1
-
-Open Chrome and navigate to:
-
-```text
-chrome://extensions
-```
-
----
-
-## Step 2
-
-Enable:
-
-```text
-Developer mode
-```
-
----
-
-## Step 3
-
-Click:
-
-```text
-Load unpacked
-```
-
----
-
-## Step 4
-
-Select the appropriate extension directory containing:
-
-```text
-manifest.json
-```
-
-For this repository, verify the extension structure before loading and select the directory expected by Chrome.
-
----
-
-# Testing
-
-To test the complete pipeline:
-
-## 1. Start the backend
-
-```powershell
-cd yolo-opencv
-python server.py
-```
-
----
-
-## 2. Verify the backend
-
-Open:
-
-```text
-http://127.0.0.1:8000/health
-```
-
----
-
-## 3. Load the Chrome Extension
-
-Load the unpacked extension from:
-
-```text
-chrome://extensions
-```
-
----
-
-## 4. Open a Test Webpage
-
-Use a webpage containing:
-
-* Text
-* Buttons
-* Links
-* Forms
-* Images
-
----
-
-## 5. Trigger the Perception Flow
-
-The expected processing flow is:
-
-```text
-Browser Context
-      +
-Screenshot
-      │
-      ▼
-Visual Analysis
-      │
-      ▼
-Structured Perception Data
-      │
-      ▼
-FastAPI Server
-```
-
----
-
-# Benchmark Directories
-
-The repository contains directories for benchmark data:
-
-```text
-benchmarks/
-├── results/
-└── screenshots/
-```
-
-Generated screenshots and benchmark results are excluded from version control.
-
-The directories are retained using `.gitkeep` files.
-
----
-
-# Model Files
-
-Large model weights are intentionally excluded from the repository.
-
-Examples include:
-
-```text
-*.pt
-*.pth
-*.onnx
-```
-
-If the visual detection pipeline requires a model file, it must be placed in the appropriate local directory before running the detection pipeline.
-
-For example:
-
-```text
-yolo-opencv/models/
-```
-
-or according to the paths configured in the source code.
-
----
-
-# Technologies Used
-
-## Browser
-
-* JavaScript
-* Chrome Extension Manifest V3
-* Chrome Runtime API
-* Chrome Tabs API
-
-## Backend
-
-* Python
-* FastAPI
-* Uvicorn
-
-## Computer Vision
-
-* OpenCV
-* YOLO-based object detection
-* OCR
-* Image processing
-
----
-
-# Current Scope
-
-The current implementation focuses on:
-
-* Browser perception
-* DOM context extraction
-* Interactive element detection
-* Form extraction
-* Screenshot capture
-* OCR-based visual text extraction
-* Visual region processing
-* Object detection
-* Bounding box processing
-* Structured browser perception data
-* Local backend communication
-
----
-
-# Integration
-
-This project is designed to provide browser perception information that can be consumed by downstream components.
-
-The generated structured context can support future stages such as:
-
-```text
-Browser Perception
-        │
-        ▼
-Context Understanding
-        │
-        ▼
-Task Reasoning
-        │
-        ▼
-Action Planning
-        │
-        ▼
-Browser Automation
-```
-
-The current repository primarily focuses on the **browser perception and visual analysis layer**.
-
----
-
-# Important Notes
-
-* The backend currently runs locally.
-* Model weights are not committed to the repository.
-* Generated benchmark screenshots and results are excluded from Git.
-* The project uses a Chrome Extension for browser-side data collection.
-* Visual analysis is performed through the Python backend.
-
----
-
-# Status
-
-## Implemented
-
-* [x] Chrome Extension structure
-* [x] Manifest V3 configuration
-* [x] Content script
-* [x] Background service worker
-* [x] Browser runtime messaging
-* [x] Screenshot capture
-* [x] FastAPI backend
-* [x] Image upload endpoint
-* [x] OCR integration
-* [x] Visual detection pipeline
-* [x] Object detection integration
-* [x] Browser perception endpoint
-* [x] Structured perception data flow
-* [x] Benchmark directory structure
-* [x] Git configuration for generated files and model weights
-
----
+# Windows: .venv\\Scripts\\activate
+# Linux/macOS: source .venv/bin/activate
+python -m pip install -r requirements.txt
+\`\`\`
+
+Configure \`server-vlm/.env\`, then run \`./start.sh\` on Linux/macOS or \`./start.ps1\` in PowerShell.
+
+\`\`\`bash
+curl http://127.0.0.1:9001/health
+\`\`\`
+
+The default endpoint is \`http://127.0.0.1:9001/v1/agent\`. Never place provider API keys in the extension.
+
+## Project layout
+
+\`\`\`text
+extensions/
+  manifest.json                    Chrome MV3 configuration
+  src/background.js                browser-level routing/capture/tasks
+  src/content.js                   DOM extraction and privacy redaction
+  src/local-vision-privacy.js      MediaPipe + Tesseract local vision
+  src/chatbot.js                   page-local runtime/task executor
+  public/home.html, home.js        native Side Panel UI
+server-vlm/
+  main.py                          VLM provider gateway service
+  prompt_builder.py                compact sanitised model prompts
+  task_parser.py                   strict tasks.json validation
+  config.py                        environment configuration
+dist/                              built unpacked extension
+\`\`\`
+
+## Security boundaries and limitations
+
+- Raw screenshots are held only temporarily in browser memory for local sanitisation; they are not downloaded or sent to the VLM.
+- The Side Panel preview is sanitised and temporary.
+- The server checks privacy metadata and validates model output before execution.
+- Provider keys remain server-side.
+- A VLM cannot run arbitrary code: action parsing and allow-lists constrain plans.
+
+This is an active prototype. OCR, face detection, and heuristic name recognition can miss unusual, tiny, low-quality, or multilingual content. Test with synthetic data, inspect sanitised output, and do not use an experimental browser agent as the only protection for highly sensitive production data.
