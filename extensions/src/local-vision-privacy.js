@@ -255,9 +255,6 @@ async function detectDocumentPii(image) {
     }
     const fallbackRegions = aadhaarLayoutFallback(data.text, target, image);
     if (fallbackRegions.length > 0) {
-      console.info("[VPBA privacy] Aadhaar document layout fallback applied", {
-        regions: fallbackRegions.length,
-      });
       regions.push(...fallbackRegions);
     }
   }
@@ -359,16 +356,13 @@ export async function inspectScreenshotLocally(dataUrl, classifySensitiveText) {
     // reason in the extension status/console for diagnosis.
     faceRuntime = "DOM/regex privacy fallback (face landmarker unavailable)";
     faceDetectionFailed = true;
-    const detail = error?.message || String(error);
-    console.error("[VPBA privacy] Face detector unavailable:", detail);
-    reportProgress(`Face detector unavailable: ${detail}`);
+    reportProgress("Face detector unavailable; continuing with DOM and OCR privacy redaction.");
   }
   try {
     ocrRegions = await detectDocumentPii(image);
-  } catch (error) {
+  } catch {
     // OCR is additive; face/DOM redaction still completes if a browser blocks
     // a worker on a particular page.
-    console.warn("[VPBA privacy] Local OCR unavailable:", error?.message || String(error));
   }
   const faceRegions = faces
     .filter((rect) => rect.width > 0 && rect.height > 0)

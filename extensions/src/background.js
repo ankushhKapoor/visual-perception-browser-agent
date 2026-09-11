@@ -224,8 +224,13 @@ chrome.runtime.onMessage.addListener(
       message.type ===
       "SEND_SANITIZED_FOR_ANALYSIS"
     ) {
-      if (!sender.tab?.id) {
-        sendResponse({ success: false, error: "Privacy gate blocked unknown sender" });
+      if (
+        !sender.tab?.id ||
+        !message.privacyProof?.sanitized ||
+        message.privacyProof?.rawScreenshotIncluded ||
+        !Array.isArray(message.privacyProof?.redactionMap)
+      ) {
+        sendResponse({ success: false, error: "Privacy gate blocked unsanitized screenshot" });
         return false;
       }
       (async () => {
@@ -338,42 +343,6 @@ chrome.runtime.onMessage.addListener(
         }
       })();
 
-      return true;
-    }
-
-    if (message.type === "SAVE_PRIVACY_DEBUG_ARTIFACTS") {
-      const { originalScreenshot, sanitizedScreenshot, captureId } = message;
-      if (
-        !sender.tab?.id ||
-        !String(originalScreenshot || "").startsWith("data:image/") ||
-        !String(sanitizedScreenshot || "").startsWith("data:image/")
-      ) {
-        sendResponse({ success: false, error: "Invalid privacy debug artifacts" });
-        return false;
-      }
-
-      const folder = "VPBA Privacy Debug";
-      chrome.downloads.download({
-        url: originalScreenshot,
-        filename: `${folder}/${captureId}-original.png`,
-        saveAs: false,
-      }, (originalDownloadId) => {
-        if (chrome.runtime.lastError) {
-          sendResponse({ success: false, error: chrome.runtime.lastError.message });
-          return;
-        }
-        chrome.downloads.download({
-          url: sanitizedScreenshot,
-          filename: `${folder}/${captureId}-sanitized.png`,
-          saveAs: false,
-        }, (sanitizedDownloadId) => {
-          if (chrome.runtime.lastError) {
-            sendResponse({ success: false, error: chrome.runtime.lastError.message });
-            return;
-          }
-          sendResponse({ success: true, originalDownloadId, sanitizedDownloadId });
-        });
-      });
       return true;
     }
 

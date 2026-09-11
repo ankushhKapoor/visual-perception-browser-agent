@@ -1,8 +1,5 @@
 import { inspectScreenshotLocally } from "./local-vision-privacy.js";
 
-// Development-only: saves sensitive raw captures to Downloads/VPBA Privacy
-// Debug. Set to false before distributing the extension.
-const PRIVACY_DEBUG_ARTIFACTS = true;
 // Local-only demonstration mode: begin a browser privacy scan when a matching
 // page finishes loading, then rescan on settled page changes. No result from
 // this path is posted to FastAPI or the VLM.
@@ -688,6 +685,99 @@ function getSensitiveLabeledValueElements() {
   });
 }
 
+function isPersonNameCandidate(value) {
+  const normalized = String(value || "").replace(/\s+/g, " ").trim();
+  // Require at least two name-like words. This deliberately avoids treating
+  // ordinary labels such as "Customer Information" as a person.
+  return /^[A-Za-z][A-Za-z'’-]{1,}(?:\s+[A-Za-z][A-Za-z'’-]{1,}){1,3}$/.test(normalized)
+    ? normalized
+    : null;
+}
+
+function getKnownSensitivePersonNames() {
+  const names = new Set();
+
+  // Inputs are the most reliable source: their associated label has already
+  // identified the value as a name, even when the same name later appears in
+  // an unstructured sentence elsewhere on the page.
+  for (const element of document.querySelectorAll("input, textarea, [contenteditable='true']")) {
+    if (!isElementVisible(element)) continue;
+    const value = element.isContentEditable ? element.innerText : element.value;
+    const metadata = [
+      element.type,
+      element.name,
+      element.id,
+      element.autocomplete,
+      element.placeholder,
+      element.getAttribute("aria-label"),
+      getLabelForElement(element),
+    ].filter(Boolean).join(" ");
+    if (classifySensitiveText(metadata, value)?.category === "PERSON") {
+      const name = isPersonNameCandidate(value);
+      if (name) names.add(name);
+    }
+  }
+
+  // Also support table/card layouts such as "Full Name | Rohan Mehta".
+  for (const element of document.querySelectorAll("tr, [role='row'], li, dl, p, div")) {
+    if (!isElementVisible(element)) continue;
+    const rect = getElementRect(element);
+    if (rect.width < 80 || rect.width > window.innerWidth * 0.95 || rect.height > 90) continue;
+    const text = (element.innerText || "").replace(/\s+/g, " ").trim();
+    const nameLabel = SENSITIVE_VALUE_LABELS.find(
+      ([category, labelPattern]) => category === "PERSON" && labelPattern.test(text)
+    )?.[1];
+    if (!nameLabel) continue;
+    const nodes = [];
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+      const value = node.textContent?.replace(/\s+/g, " ").trim();
+      if (value && node.parentElement && isElementVisible(node.parentElement)) nodes.push(value);
+    }
+    for (const value of nodes) {
+      if (!nameLabel.test(value)) {
+        const name = isPersonNameCandidate(value);
+        if (name) names.add(name);
+      }
+    }
+  }
+  return [...names];
+}
+
+function getRepeatedSensitivePersonNameElements() {
+  const names = getKnownSensitivePersonNames();
+  if (names.length === 0) return [];
+  const expression = new RegExp(
+    `\\b(?:${names.map(escapeRegExp).join("|")})\\b`,
+    "gi"
+  );
+  const detections = [];
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  let textNode;
+  while ((textNode = walker.nextNode())) {
+    const parent = textNode.parentElement;
+    if (!parent || !isElementVisible(parent) || ["SCRIPT", "STYLE", "NOSCRIPT"].includes(parent.tagName)) continue;
+    const text = textNode.textContent || "";
+    expression.lastIndex = 0;
+    let match;
+    while ((match = expression.exec(text)) !== null) {
+      const rect = getTextRangeRect(textNode, match.index, match.index + match[0].length);
+      if (!rect) continue;
+      detections.push({
+        source: "known-person-name",
+        tag: parent.tagName.toLowerCase(),
+        category: "PERSON",
+        severity: "HIGH",
+        reason: "known sensitive name repeated in visible text",
+        text: "[REDACTED]",
+        rect,
+      });
+    }
+  }
+  return detections;
+}
+
 function getPersonQuery() {
   const queryInput = Array.from(document.querySelectorAll(
     // Google Search currently uses textarea[name=q] on many layouts; only
@@ -832,6 +922,7 @@ function getSensitiveElements() {
     ...getSensitiveInputElements(),
     ...getSensitiveTextElements(),
     ...getSensitiveLabeledValueElements(),
+    ...getRepeatedSensitivePersonNameElements(),
     ...getQueryPersonSensitiveElements(),
     ...getGitHubProfileIdentityElements(),
     ...getGitHubProfileAvatarElements()
@@ -1380,30 +1471,36 @@ function viewportRectFromImageRect(imageRect, imageWidth, imageHeight) {
   };
 }
 
-function savePrivacyDebugArtifacts(originalScreenshot, sanitizedScreenshot, details) {
-  if (!PRIVACY_DEBUG_ARTIFACTS) return;
+function getConsoleSafeScreenText(text) {
+  let sanitizedText = sanitizeText(text)
+    .replace(
+      /\b(?:full|legal|customer|account\s+holder|beneficiary|profile)\s+name\s*[:\-]?\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3}\b/g,
+      "<PERSON_1>"
+    )
+    .replace(
+      /\b(?:date\s+of\s+birth|dob|birth\s+date)\s*[:\-]?\s*(?:\d{1,2}[/.\-]\d{1,2}[/.\-]\d{2,4}|\d{1,2}\s+[A-Za-z]+\s+\d{2,4})\b/gi,
+      "<DATE_OF_BIRTH_1>"
+    )
+    .replace(
+      /\b(?:residential|current|home|mailing)?\s*address\s*[:\-]?\s*[^\n]{1,240}/gi,
+      "<ADDRESS_1>"
+    );
 
-  const captureId = new Date().toISOString().replace(/[:.]/g, "-");
-  console.groupCollapsed(`[VPBA privacy] ${captureId}`);
-  console.info("Redaction map:", details.redactionMap);
-  console.info("Local model analysis:", details.analysis);
-  console.info("Sanitized visible text:", details.sanitizedVisibleText);
-  console.info("Original screenshot data URL (sensitive):", originalScreenshot);
-  console.info("Sanitized screenshot data URL:", sanitizedScreenshot);
-  console.groupEnd();
+  for (const name of getKnownSensitivePersonNames()) {
+    sanitizedText = sanitizedText.replace(
+      new RegExp(`\\b${escapeRegExp(name)}\\b`, "gi"),
+      "<PERSON_1>"
+    );
+  }
+  return sanitizedText;
+}
 
-  chrome.runtime.sendMessage({
-    type: "SAVE_PRIVACY_DEBUG_ARTIFACTS",
-    captureId,
-    originalScreenshot,
-    sanitizedScreenshot,
-  }, (response) => {
-    if (chrome.runtime.lastError || !response?.success) {
-      console.warn("[VPBA privacy] Could not save debug screenshots:",
-        chrome.runtime.lastError?.message || response?.error);
-      return;
-    }
-    console.info("[VPBA privacy] Saved original and sanitized screenshots to Downloads/VPBA Privacy Debug/");
+function logFinalSanitizedScreenContent(pageContext, redactionMap) {
+  const categories = [...new Set(redactionMap.map((region) => region.category))];
+  console.log("[VPBA privacy] Final sanitized screen content:", {
+    visibleText: getConsoleSafeScreenText(pageContext.visibleText),
+    redactedRegionCount: redactionMap.length,
+    redactedCategories: categories,
   });
 }
 
@@ -1411,7 +1508,6 @@ function savePrivacyDebugArtifacts(originalScreenshot, sanitizedScreenshot, deta
 // input remains in the browser, while this function returns only a redacted
 // image and non-sensitive detection summaries for later server communication.
 async function prepareClientSanitizedCapture(pageContext, screenshot) {
-  console.info("[VPBA privacy] Starting local face, object, and OCR analysis. Model assets may download on first use.");
   const localVision = await inspectScreenshotLocally(screenshot, classifySensitiveText);
   const imageWidth = localVision.image.width;
   const imageHeight = localVision.image.height;
@@ -1448,11 +1544,9 @@ async function prepareClientSanitizedCapture(pageContext, screenshot) {
     },
     image: { width: imageWidth, height: imageHeight },
   };
-  savePrivacyDebugArtifacts(screenshot, sanitizedScreenshot, {
-    redactionMap,
-    analysis,
-    sanitizedVisibleText: sanitizeText(protectedContext.visibleText),
-  });
+  // The raw capture is intentionally held only for this local redaction step.
+  // This is the sole extension console entry and contains no image data.
+  logFinalSanitizedScreenContent(protectedContext, redactionMap);
 
   return {
     pageContext: protectedContext,
@@ -2642,7 +2736,8 @@ function captureScreenshot(
 
         
       } catch (error) {
-        console.error("[VPBA privacy] Local capture failed:", getRuntimeErrorMessage(error));
+        // The UI receives failures through its normal response path. Do not
+        // emit page or privacy diagnostics into the site's developer console.
       } finally {
         isCaptureInProgress = false;
         if (captureRequested) {
@@ -2653,7 +2748,6 @@ function captureScreenshot(
     );
   } catch (error) {
     isCaptureInProgress = false;
-    console.error("[VPBA privacy] Could not request screenshot capture:", getRuntimeErrorMessage(error));
   }
 }
 
@@ -2740,13 +2834,6 @@ async function runLocalPrivacyScan(reason) {
     const screenshot = await captureVisibleScreenshot();
     const clientCapture = await prepareClientSanitizedCapture(pageContext, screenshot);
     const summary = clientCapture.analysis.detection_summary;
-    console.info("[VPBA privacy] Created sanitized screenshot", {
-      reason,
-      regions: clientCapture.redactionMap.length,
-      categories: clientCapture.redactionMap.map((item) => item.category),
-      facesDetected: summary.facesDetected,
-      faceDetectionFailed: summary.faceDetectionFailed,
-    });
     lastLocalPrivacyScanAt = Date.now();
     return {
       redactedRegions: clientCapture.redactionMap.length,
@@ -2778,9 +2865,7 @@ function startLocalPrivacyWatcher() {
       if (Date.now() - lastLocalPrivacyScanAt < 15000 || localPrivacyScanInProgress) return;
       try {
         await runLocalPrivacyScan("page changed");
-      } catch (error) {
-        console.error("[VPBA privacy] Page-change scan failed:", getRuntimeErrorMessage(error));
-      }
+      } catch {}
     }, 2000);
   });
 
@@ -2800,7 +2885,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ success: true, summary });
     })
     .catch((error) => {
-      console.error("[VPBA privacy] Local-only scan failed:", getRuntimeErrorMessage(error));
       sendResponse({ success: false, error: getRuntimeErrorMessage(error) });
     });
 
@@ -2811,9 +2895,7 @@ if (LOCAL_PRIVACY_AUTO_SCAN) {
   setTimeout(() => {
     runLocalPrivacyScan("page loaded")
       .then(() => startLocalPrivacyWatcher())
-      .catch((error) => {
-        console.error("[VPBA privacy] Initial local scan failed:", getRuntimeErrorMessage(error));
-      });
+      .catch(() => {});
   }, 1200);
 }
 
@@ -2889,7 +2971,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         sendResponse({ success: true, tasks: agentResponse.tasks, model: agentResponse.model });
       } catch (err) {
-        console.error("[VPBA privacy] Agent capture failed:", getRuntimeErrorMessage(err));
         sendResponse({ success: false, error: getRuntimeErrorMessage(err) });
       }
     })();
