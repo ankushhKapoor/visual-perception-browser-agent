@@ -1775,10 +1775,12 @@
         } else {
           renderTasks(handle, next.tasks);
           handle.save();
-          const result = await execTasks(next.tasks, (s, t, status) => updateStep(s, status, t), {
+          const navExecResult = await execTasks(next.tasks, (s, t, status) => updateStep(s, status, t), {
             intent: saved.intent, replanAfterNavigation: needsFreshResultPlan(next.tasks),
           });
-          if (!result.navigating && !result.success) handle.append(`<div class="verr">Stopped: ${esc(result.error || "")}</div>`);
+          appendSourcePill(handle, next);
+          finaliseSteps(handle);
+          if (!navExecResult.navigating && !navExecResult.success) handle.append(`<div class="verr">Stopped: ${esc(navExecResult.error || "")}</div>`);
         }
       } catch (err) {
         if (await clickYoutubeFinalResult(saved.intent)) {
@@ -1797,13 +1799,14 @@
     setProcessing(true);
     renderTasks(handle, { tasks: saved.tasks });
     handle.save();
-    const result = await execTasks({ tasks: saved.tasks }, (s, t, status) => updateStep(s, status, t), { intent: saved.intent });
-    if (!result.navigating) {
-      handle.append(result.success
+    const contResult = await execTasks({ tasks: saved.tasks }, (s, t, status) => updateStep(s, status, t), { intent: saved.intent });
+    finaliseSteps(handle);
+    if (!contResult.navigating) {
+      handle.append(contResult.success
         ? `<div class="vans" style="margin-top:8px">Remaining steps completed.</div>`
-        : `<div class="verr" style="margin-top:8px">Stopped: ${esc(result.error || "")}</div>`);
+        : `<div class="verr" style="margin-top:8px">Stopped: ${esc(contResult.error || "")}</div>`);
       setProcessing(false);
-      if (!result.success) setStatus("err");
+      if (!contResult.success) setStatus("err");
     }
     handle.save();
   }
