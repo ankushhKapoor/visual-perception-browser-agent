@@ -58,6 +58,7 @@ function bundleMediaPipeAssets() {
       cpSync(resolve("node_modules/tesseract.js/dist/worker.min.js"), resolve("dist/assets/tesseract/worker.min.js"));
       cpSync(resolve("node_modules/tesseract.js-core"), resolve("dist/assets/tesseract/core"), { recursive: true });
       cpSync(resolve("extensions/assets/tessdata-best"), resolve("dist/assets/tessdata-best"), { recursive: true });
+      cpSync(resolve("extensions/icons"), resolve("dist/icons"), { recursive: true });
     },
   };
 }

@@ -19,10 +19,10 @@
   if (document.getElementById("vpba-root")) return;
 
   // ── Config ─────────────────────────────────────────────────────────────────
-  const PANEL_W   = 390;
+  const PANEL_W = 390;
   const MAX_ELEMS = 60;
-  const MAX_TEXT  = 3000;
-  const MAX_HIST  = 60;
+  const MAX_TEXT = 3000;
+  const MAX_HIST = 60;
   // A task may need a fresh plan after several navigation or SPA transitions.
   // Keep the budget explicit so a stalled site cannot create unbounded calls.
   const MAX_AGENT_CALLS_PER_TASK = 7;
@@ -41,10 +41,10 @@
   ];
 
   // ── State ──────────────────────────────────────────────────────────────────
-  let panelOpen    = false;
-  let processing   = false;
+  let panelOpen = false;
+  let processing = false;
   let pendingTasks = null;   // eslint-disable-line no-unused-vars
-  let chatHistory  = [];     // [{ role:"user"|"agent", text?:"", html?:"" }]
+  let chatHistory = [];     // [{ role:"user"|"agent", text?:"", html?:"" }]
   let myTabId = null;
   let taskCancelled = false;
 
@@ -344,14 +344,14 @@
 
   // ── HTML ────────────────────────────────────────────────────────────────────
   const html = `
-  <button id="vpba-tab" title="Open Visual Agent">
+  <button id="vpba-tab" title="Open Privacy Preserving Visual Browser Agent">
     <span id="vpba-tab-icon">👁</span>
     <span id="vpba-tab-letter">AGENT</span>
   </button>
   <div id="vpba-panel">
     <div id="vpba-hdr">
       <div id="vpba-hdr-logo">👁</div>
-      <span id="vpba-hdr-title">Visual Agent</span>
+      <span id="vpba-hdr-title">Privacy Preserving Visual Browser Agent</span>
       <span id="vpba-hdr-subtitle">Qwen2.5-VL-3B</span>
       <div id="vpba-hdr-status"></div>
       <button id="vpba-close">✕</button>
@@ -385,22 +385,24 @@
   rootEl.innerHTML = html;
   document.body.appendChild(rootEl);
 
+
+
   // Refs
-  const tab    = document.getElementById("vpba-tab");
-  const panel  = document.getElementById("vpba-panel");
+  const tab = document.getElementById("vpba-tab");
+  const panel = document.getElementById("vpba-panel");
   const closeB = document.getElementById("vpba-close");
-  const msgs   = document.getElementById("vpba-msgs");
-  const inp    = document.getElementById("vpba-in");
-  const sendB  = document.getElementById("vpba-send");
-  const statusD= document.getElementById("vpba-hdr-status");
+  const msgs = document.getElementById("vpba-msgs");
+  const inp = document.getElementById("vpba-in");
+  const sendB = document.getElementById("vpba-send");
+  const statusD = document.getElementById("vpba-hdr-status");
 
   // ── Panel toggle ────────────────────────────────────────────────────────────
   function savePanelState(open) {
     chrome.storage.local.set({ [BROWSER_PANEL_OPEN_KEY]: Boolean(open) });
   }
-  function openPanel()  { panelOpen = true;  panel.classList.add("open");    tab.classList.add("shifted"); savePanelState(true); inp.focus(); }
+  function openPanel() { panelOpen = true; panel.classList.add("open"); tab.classList.add("shifted"); savePanelState(true); inp.focus(); }
   function closePanel() { panelOpen = false; panel.classList.remove("open"); tab.classList.remove("shifted"); savePanelState(false); }
-  tab.addEventListener("click",   () => panelOpen ? closePanel() : openPanel());
+  tab.addEventListener("click", () => panelOpen ? closePanel() : openPanel());
   closeB.addEventListener("click", closePanel);
 
   // ── Status dot ──────────────────────────────────────────────────────────────
@@ -409,10 +411,10 @@
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
   function esc(t) {
-    return String(t).replace(/&/g,"&amp;").replace(/</g,"&lt;")
-      .replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+    return String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   }
-  function now() { return new Date().toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}); }
+  function now() { return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); }
   function scrollBot() { msgs.scrollTop = msgs.scrollHeight; }
   function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
   function extensionContextAvailable() {
@@ -466,7 +468,7 @@
           if (!hist || !hist.length) return resolve(false);
           chatHistory = hist;
           hist.forEach(m => {
-            if (m.role === "user")  _renderUserBubble(m.text);
+            if (m.role === "user") _renderUserBubble(m.text);
             else if (m.role === "agent") _renderAgentBubble(m.html);
           });
           resolve(true);
@@ -479,7 +481,7 @@
     try {
       const trimmed = chatHistory.slice(-MAX_HIST);
       chrome.storage.local.set({ [BROWSER_HISTORY_KEY]: trimmed });
-    } catch (_) {}
+    } catch (_) { }
   }
 
   function renderHistory() {
@@ -548,9 +550,9 @@
     let savedIndex = null;
     return {
       el, bubble, ts,
-      set(html)    { bubble.innerHTML = html; ts.textContent = now(); scrollBot(); },
+      set(html) { bubble.innerHTML = html; ts.textContent = now(); scrollBot(); },
       append(html) { bubble.insertAdjacentHTML("beforeend", html); scrollBot(); },
-      save()       {
+      save() {
         const saved = bubble.cloneNode(true);
         saved.querySelectorAll(".vsrc-preview").forEach(node => node.remove());
         const entry = { role: "agent", html: saved.innerHTML };
@@ -588,8 +590,8 @@
         phase,
         text,
         active: Boolean(active),
-      }).catch(() => {});
-    } catch (_) {}
+      }).catch(() => { });
+    } catch (_) { }
   }
 
   function stopActiveTask() {
@@ -626,7 +628,7 @@
   // Avoids false positives like "please ask chatgpt what is X" where
   // "what" is buried inside an action sentence.
   const QUESTION_START_RE = /^(what|how many|how much|is there|are there|show me|find|list|tell me|describe|count|which|where|when|who|why|does|did|can you see|do you see|any|how)\b/i;
-  const QUESTION_FULL_RE  = /^(what|how|which|is|are|does|did|can|who|where|when|why)\b[^.!]*\?\s*$/i;
+  const QUESTION_FULL_RE = /^(what|how|which|is|are|does|did|can|who|where|when|why)\b[^.!]*\?\s*$/i;
 
   function isQuestion(intent) {
     const t = intent.trim();
@@ -682,8 +684,10 @@
         elementId: id,
         selector: `[data-vpba-element="${id}"]`,
         tag: el.tagName.toLowerCase(),
-        category: { BUTTON:"button", INPUT:"input", TEXTAREA:"textarea",
-                    SELECT:"select", A:"link" }[el.tagName] || el.tagName.toLowerCase(),
+        category: {
+          BUTTON: "button", INPUT: "input", TEXTAREA: "textarea",
+          SELECT: "select", A: "link"
+        }[el.tagName] || el.tagName.toLowerCase(),
         role,
         editable: Boolean(el.isContentEditable),
         type: el.getAttribute("type") || null,
@@ -711,7 +715,7 @@
       const u = new URL(window.location.href);
       u.username = ""; u.password = ""; u.search = ""; u.hash = "";
       safeUrl = u.toString();
-    } catch (_) {}
+    } catch (_) { }
 
     return {
       page: {
@@ -762,7 +766,7 @@
         const r = await window.vpbaPrepareCapture(pc, raw);
         const dataUrl = r.sanitizedScreenshot;
         return { dataUrl, b64: dataUrl.replace(/^data:image\/\w+;base64,/, ""), redactionMap: r.redactionMap };
-      } catch (_) {}
+      } catch (_) { }
     }
     const pc = privacy.extractPageContext();
     const sensitive = pc.sensitiveElements || [];
@@ -825,8 +829,8 @@
           sanitizedText: String(source?.sanitizedText || ""),
           sanitizedImage: source?.imageDataUrl || null,
         },
-      }).catch(() => {});
-    } catch (_) {}
+      }).catch(() => { });
+    } catch (_) { }
   }
 
   // ── Call agent backend ────────────────────────────────────────────────────────
@@ -875,12 +879,12 @@
             image ? "Sanitized text and image sent to the VLM" : "Sanitized text sent to the VLM"
           );
           resolve({
-            tasks:          res.tasks,
-            hadImage:       !!image,
-            elementCount:   ctx.interactiveElements.length,
+            tasks: res.tasks,
+            hadImage: !!image,
+            elementCount: ctx.interactiveElements.length,
             visibleTextLen: (ctx.visibleText || "").length,
-            model:          res.model,
-            latencyMs:      res.latency_ms,
+            model: res.model,
+            latencyMs: res.latency_ms,
             source,
           });
         });
@@ -946,7 +950,7 @@
           const s = window.getComputedStyle(e);
           return r.width > 0 && r.height > 0 && s.visibility !== "hidden" && s.display !== "none";
         }) || candidates[0];
-      } catch (_) {}
+      } catch (_) { }
     }
 
     if (target.elementId) {
@@ -977,7 +981,7 @@
       "button,input,textarea,select,a[href],[contenteditable],[role='button'],[role='link'],[role='textbox']"
     )).filter(isVisiblePageElement).map(el => {
       const values = [el.getAttribute("aria-label"), el.getAttribute("title"), el.getAttribute("placeholder"),
-        el.getAttribute("data-testid"), el.getAttribute("name"), elementText(el)].map(norm);
+      el.getAttribute("data-testid"), el.getAttribute("name"), elementText(el)].map(norm);
       let score = descriptor.tag === el.tagName.toLowerCase() ? 3 : 0;
       if (descriptor.role && descriptor.role === el.getAttribute("role")) score += 3;
       for (const term of expected) {
@@ -1049,7 +1053,7 @@
     } else {
       el.value = value;
     }
-    el.dispatchEvent(new Event("input",  { bubbles: true }));
+    el.dispatchEvent(new Event("input", { bubbles: true }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
   }
 
@@ -1061,26 +1065,26 @@
    */
   function simulateClick(el) {
     const rect = el.getBoundingClientRect();
-    const cx   = rect.left + rect.width  / 2;
-    const cy   = rect.top  + rect.height / 2;
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
     const base = {
       bubbles: true, cancelable: true, view: window,
       detail: 1, clientX: cx, clientY: cy,
     };
 
-    el.dispatchEvent(new PointerEvent("pointerover",  { ...base, isPrimary: true }));
+    el.dispatchEvent(new PointerEvent("pointerover", { ...base, isPrimary: true }));
     el.dispatchEvent(new PointerEvent("pointerenter", { ...base, isPrimary: true, bubbles: false }));
-    el.dispatchEvent(new MouseEvent("mouseover",  base));
+    el.dispatchEvent(new MouseEvent("mouseover", base));
     el.dispatchEvent(new PointerEvent("pointermove", { ...base, isPrimary: true }));
-    el.dispatchEvent(new MouseEvent("mousemove",  base));
+    el.dispatchEvent(new MouseEvent("mousemove", base));
     el.dispatchEvent(new PointerEvent("pointerdown", { ...base, isPrimary: true, button: 0, buttons: 1 }));
     el.dispatchEvent(new MouseEvent("mousedown", { ...base, button: 0, buttons: 1 }));
     el.focus({ preventScroll: true });
-    el.dispatchEvent(new PointerEvent("pointerup",  { ...base, isPrimary: true, button: 0 }));
-    el.dispatchEvent(new MouseEvent("mouseup",  { ...base, button: 0 }));
+    el.dispatchEvent(new PointerEvent("pointerup", { ...base, isPrimary: true, button: 0 }));
+    el.dispatchEvent(new MouseEvent("mouseup", { ...base, button: 0 }));
     // Dispatching a click and then calling click() activates toggle controls
     // twice (Play immediately becomes Pause).  Use one activation only.
-    try { el.click(); } catch (_) {}
+    try { el.click(); } catch (_) { }
   }
 
   function elementText(el) {
@@ -1264,7 +1268,7 @@
     await delay(60);
 
     for (const ch of text) {
-      el.dispatchEvent(new KeyboardEvent("keydown",  { key: ch, code: `Key${ch.toUpperCase()}`, bubbles: true, cancelable: true }));
+      el.dispatchEvent(new KeyboardEvent("keydown", { key: ch, code: `Key${ch.toUpperCase()}`, bubbles: true, cancelable: true }));
       el.dispatchEvent(new KeyboardEvent("keypress", { key: ch, bubbles: true, cancelable: true }));
 
       // Append character using native setter for React incremental state updates
@@ -1297,7 +1301,7 @@
    */
   async function doKey(task) {
     const key = task.key || task.value || "Enter";
-    const el  = task.target ? resolveEl(task.target) : document.activeElement;
+    const el = task.target ? resolveEl(task.target) : document.activeElement;
     const tgt = el || document.body;
     if (el && await performTrustedAction("key", el, { key })) {
       await delay(250);
@@ -1305,10 +1309,10 @@
     }
     const opts = { key, bubbles: true, cancelable: true, view: window };
 
-    tgt.dispatchEvent(new KeyboardEvent("keydown",  opts));
+    tgt.dispatchEvent(new KeyboardEvent("keydown", opts));
     await delay(60);
     tgt.dispatchEvent(new KeyboardEvent("keypress", opts));
-    tgt.dispatchEvent(new KeyboardEvent("keyup",    opts));
+    tgt.dispatchEvent(new KeyboardEvent("keyup", opts));
 
     // Synthetic key events do not invoke the browser's default Enter action.
     // requestSubmit invokes normal form submit handlers (e.g. YouTube search).
@@ -1337,27 +1341,27 @@
 
   async function doScroll(task) {
     const dir = task.direction || "down";
-    const px  = task.pixels || 300;
+    const px = task.pixels || 300;
     if (task.target) {
       const el = resolveEl(task.target);
-      if (el) { el.scrollIntoView({ behavior:"smooth", block:"center" }); return; }
+      if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); return; }
     }
     const map = {
       down: { top: px, left: 0 }, up: { top: -px, left: 0 },
       right: { top: 0, left: px }, left: { top: 0, left: -px },
     };
-    window.scrollBy({ ...(map[dir] || map.down), behavior:"smooth" });
+    window.scrollBy({ ...(map[dir] || map.down), behavior: "smooth" });
     await delay(380);
   }
 
   async function doWait(task) {
-    const ms   = task.timeout_ms || 2000;
+    const ms = task.timeout_ms || 2000;
     const cond = task.condition || "timeout";
     if (cond === "timeout") { await delay(ms); return; }
     const deadline = Date.now() + ms;
     while (Date.now() < deadline) {
       if (cond === "navigation" && document.readyState === "complete") return;
-      if (cond === "selector"  && task.selector && document.querySelector(task.selector)) return;
+      if (cond === "selector" && task.selector && document.querySelector(task.selector)) return;
       await delay(100);
     }
   }
@@ -1371,9 +1375,9 @@
   async function doHover(task) {
     const el = resolveEl(task.target);
     if (!el) throw new Error("hover: element not found");
-    el.scrollIntoView({ behavior:"smooth", block:"center" });
-    el.dispatchEvent(new MouseEvent("mouseover",  { bubbles:true }));
-    el.dispatchEvent(new MouseEvent("mouseenter", { bubbles:true }));
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    el.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+    el.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
     await delay(180);
   }
 
@@ -1393,7 +1397,7 @@
     el.dispatchEvent(new MouseEvent("dblclick", {
       bubbles: true, cancelable: true, view: window,
       clientX: rect.left + rect.width / 2,
-      clientY: rect.top  + rect.height / 2,
+      clientY: rect.top + rect.height / 2,
     }));
     await delay(200);
   }
@@ -1408,13 +1412,13 @@
     await delay(300);
     const rect = el.getBoundingClientRect();
     const cx = rect.left + rect.width / 2;
-    const cy = rect.top  + rect.height / 2;
+    const cy = rect.top + rect.height / 2;
     const base = { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy };
     el.dispatchEvent(new PointerEvent("pointerdown", { ...base, isPrimary: true, button: 2, buttons: 2 }));
-    el.dispatchEvent(new MouseEvent("mousedown",     { ...base, button: 2, buttons: 2 }));
-    el.dispatchEvent(new PointerEvent("pointerup",   { ...base, isPrimary: true, button: 2 }));
-    el.dispatchEvent(new MouseEvent("mouseup",       { ...base, button: 2 }));
-    el.dispatchEvent(new MouseEvent("contextmenu",   { ...base, button: 2 }));
+    el.dispatchEvent(new MouseEvent("mousedown", { ...base, button: 2, buttons: 2 }));
+    el.dispatchEvent(new PointerEvent("pointerup", { ...base, isPrimary: true, button: 2 }));
+    el.dispatchEvent(new MouseEvent("mouseup", { ...base, button: 2 }));
+    el.dispatchEvent(new MouseEvent("contextmenu", { ...base, button: 2 }));
     await delay(200);
   }
 
@@ -1432,9 +1436,9 @@
     setNativeValue(el, "");
     // Also select-all + delete so contentEditable elements are cleared
     el.dispatchEvent(new KeyboardEvent("keydown", { key: "a", code: "KeyA", ctrlKey: true, bubbles: true }));
-    el.dispatchEvent(new KeyboardEvent("keyup",   { key: "a", code: "KeyA", ctrlKey: true, bubbles: true }));
+    el.dispatchEvent(new KeyboardEvent("keyup", { key: "a", code: "KeyA", ctrlKey: true, bubbles: true }));
     el.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true }));
-    el.dispatchEvent(new KeyboardEvent("keyup",   { key: "Delete", bubbles: true }));
+    el.dispatchEvent(new KeyboardEvent("keyup", { key: "Delete", bubbles: true }));
     if (el.isContentEditable) el.textContent = "";
     el.dispatchEvent(new Event("change", { bubbles: true }));
     await delay(100);
@@ -1450,7 +1454,7 @@
     el.scrollIntoView({ behavior: "smooth", block: "center" });
     await delay(150);
     el.focus({ preventScroll: false });
-    el.dispatchEvent(new FocusEvent("focus",   { bubbles: true }));
+    el.dispatchEvent(new FocusEvent("focus", { bubbles: true }));
     el.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
     await delay(150);
   }
@@ -1472,8 +1476,8 @@
 
     const sr = src.getBoundingClientRect();
     const dr = dst.getBoundingClientRect();
-    const sx = sr.left + sr.width  / 2, sy = sr.top  + sr.height / 2;
-    const dx = dr.left + dr.width  / 2, dy = dr.top  + dr.height / 2;
+    const sx = sr.left + sr.width / 2, sy = sr.top + sr.height / 2;
+    const dx = dr.left + dr.width / 2, dy = dr.top + dr.height / 2;
 
     const mkPtr = (type, x, y, extra = {}) =>
       new PointerEvent(type, { bubbles: true, cancelable: true, isPrimary: true, clientX: x, clientY: y, ...extra });
@@ -1495,11 +1499,11 @@
       await delay(20);
     }
 
-    dst.dispatchEvent(new DragEvent("dragover",  { bubbles: true, cancelable: true, clientX: dx, clientY: dy }));
-    dst.dispatchEvent(new DragEvent("drop",      { bubbles: true, cancelable: true, clientX: dx, clientY: dy }));
-    src.dispatchEvent(new DragEvent("dragend",   { bubbles: true, cancelable: true, clientX: dx, clientY: dy }));
-    src.dispatchEvent(mkPtr("pointerup",   dx, dy, { button: 0 }));
-    src.dispatchEvent(mkMouse("mouseup",   dx, dy, 0));
+    dst.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, clientX: dx, clientY: dy }));
+    dst.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, clientX: dx, clientY: dy }));
+    src.dispatchEvent(new DragEvent("dragend", { bubbles: true, cancelable: true, clientX: dx, clientY: dy }));
+    src.dispatchEvent(mkPtr("pointerup", dx, dy, { button: 0 }));
+    src.dispatchEvent(mkMouse("mouseup", dx, dy, 0));
     await delay(250);
   }
 
@@ -1546,22 +1550,22 @@
   const DOM_MUTATING = new Set(["click", "dblclick", "rightclick", "type", "key", "navigate", "opentab", "drag"]);
 
   const ACTION = {
-    click:      doClick,
-    dblclick:   doDblClick,
+    click: doClick,
+    dblclick: doDblClick,
     rightclick: doRightClick,
-    type:       doType,
-    key:        doKey,
-    select:     doSelect,
-    scroll:     doScroll,
-    wait:       doWait,
-    navigate:   doNavigate,
-    hover:      doHover,
-    focus:      doFocus,
-    clear:      doClear,
-    drag:       doDrag,
-    opentab:    doOpenTab,
-    closetabs:  doCloseTabs,
-    screenshot: async () => {},
+    type: doType,
+    key: doKey,
+    select: doSelect,
+    scroll: doScroll,
+    wait: doWait,
+    navigate: doNavigate,
+    hover: doHover,
+    focus: doFocus,
+    clear: doClear,
+    drag: doDrag,
+    opentab: doOpenTab,
+    closetabs: doCloseTabs,
+    screenshot: async () => { },
   };
 
   // A search result is not the user's requested final outcome. Some models do
@@ -1749,28 +1753,63 @@
     if (Date.now() - saved.createdAt > 120000) return;
 
     if (saved.replan && saved.intent) {
-      const handle = addAgent(`<div class="vretry">Reading the new page to continue the task...</div>`);
+      const handle = addAgent(`<div class="vretry">Reading the new page to continue the task\u2026</div>`);
       setProcessing(true);
       try {
-        // Gmail's direct-compose URL returns before its editable controls are
-        // mounted. Wait for those real elements before taking the second (and
-        // final) page snapshot; otherwise the model sees only the shell and
-        // keeps proposing Compose again.
-        if (/mail\.google\.com$/i.test(location.hostname)) {
-          await doWait({ condition: "selector", selector: "[role='dialog'] [contenteditable='true'], [role='dialog'] [role='textbox']", timeout_ms: 4500 });
-        }
+        // Wait for the page to be fully interactive before taking the
+        // continuation screenshot. Heavy SPAs (Gmail, Notion, Outlook) mount
+        // their UI asynchronously — a screenshot taken too early shows only a
+        // loading shell, so the VLM can't see the controls it needs to click.
+        await new Promise(resolve => {
+          if (document.readyState === "complete") return resolve();
+          window.addEventListener("load", resolve, { once: true });
+        });
+        // Extra settle time for known heavy SPAs.
+        const slowSite = /mail\.google\.com|outlook\.(live|office)\.com|notion\.so|linear\.app/i.test(location.hostname);
+        await delay(slowSite ? 2000 : 800);
+
         ensureNotCancelled();
         const followUpIntent = continuationIntent(saved.intent, saved.completed);
-        // Every continuation phase receives fresh DOM plus a locally redacted
-        // image. This applies to every supported search site, not just YouTube.
+        // Provide a fresh sanitized screenshot so the model sees the current
+        // page state (inbox open, search results loaded, etc.).
         const next = await callAgent(followUpIntent, true);
-        if (!Array.isArray(next.tasks?.tasks) || !next.tasks.tasks.length) {
+        const hasTasks = Array.isArray(next.tasks?.tasks) && next.tasks.tasks.length > 0;
+
+        if (!hasTasks) {
+          // VLM returned an answer/reasoning — the model considers the task
+          // done or is summarising the situation.  Treat it as a completion
+          // rather than an error so the user sees the response text.
           if (await clickYoutubeFinalResult(saved.intent)) {
             handle.set(`<div class="vans">Opened the best matching YouTube video.</div>`);
           } else if (await addMatchedResultToCart(saved.intent)) {
             handle.set(`<div class="vans">Added the visible matching item to the cart.</div>`);
           } else {
-            handle.set(`<div class="verr">${esc(next.tasks?.answer || "The next page did not provide an executable continuation.")}</div>`);
+            const answer = next.tasks?.answer || next.tasks?.reasoning;
+            if (answer) {
+              // Model gave a text answer — show it as a normal agent response.
+              handle.set(`<div class="vans">${esc(answer)}</div>`);
+            } else {
+              // No tasks and no answer: retry once with longer settle time.
+              await delay(1500);
+              ensureNotCancelled();
+              const retry = await callAgent(followUpIntent, true);
+              if (Array.isArray(retry.tasks?.tasks) && retry.tasks.tasks.length > 0) {
+                renderTasks(handle, retry.tasks);
+                handle.save();
+                const retryExec = await execTasks(retry.tasks, (s, t, status) => updateStep(s, status, t), {
+                  intent: saved.intent, replanAfterNavigation: needsFreshResultPlan(retry.tasks),
+                });
+                appendSourcePill(handle, retry);
+                finaliseSteps(handle);
+                if (!retryExec.navigating && !retryExec.success)
+                  handle.append(`<div class="verr">Stopped: ${esc(retryExec.error || "")}</div>`);
+              } else {
+                const retryAnswer = retry.tasks?.answer || retry.tasks?.reasoning;
+                handle.set(retryAnswer
+                  ? `<div class="vans">${esc(retryAnswer)}</div>`
+                  : `<div class="verr">Could not determine next steps on this page. Try rephrasing your request.</div>`);
+              }
+            }
           }
         } else {
           renderTasks(handle, next.tasks);
@@ -1780,7 +1819,8 @@
           });
           appendSourcePill(handle, next);
           finaliseSteps(handle);
-          if (!navExecResult.navigating && !navExecResult.success) handle.append(`<div class="verr">Stopped: ${esc(navExecResult.error || "")}</div>`);
+          if (!navExecResult.navigating && !navExecResult.success)
+            handle.append(`<div class="verr">Stopped: ${esc(navExecResult.error || "")}</div>`);
         }
       } catch (err) {
         if (await clickYoutubeFinalResult(saved.intent)) {
@@ -1827,10 +1867,10 @@
   }
 
   function updateStep(step, status, total) {
-    const el  = document.getElementById(`vpba-s-${step}`);
+    const el = document.getElementById(`vpba-s-${step}`);
     const bar = document.getElementById("vpba-pbar");
     // running shows the same pending dot — no spinner icon
-    const ic  = { done:"✓", fail:"✗" };
+    const ic = { done: "✓", fail: "✗" };
     if (el) {
       el.className = `vstep ${status}`;
       el.querySelector(".vstep-ic").textContent = ic[status] || "·";

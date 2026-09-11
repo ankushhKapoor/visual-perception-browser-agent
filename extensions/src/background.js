@@ -185,8 +185,31 @@ if (chrome.sidePanel) {
     .catch(() => {});
 }
 
+// Track which tabs have the side panel open so the FAB can toggle it.
+const sidePanelOpenTabs = new Set();
+if (chrome.sidePanel?.onShown) {
+  chrome.sidePanel.onShown.addListener(({ tabId }) => sidePanelOpenTabs.add(tabId));
+}
+if (chrome.sidePanel?.onHidden) {
+  chrome.sidePanel.onHidden.addListener(({ tabId }) => sidePanelOpenTabs.delete(tabId));
+}
+
 chrome.runtime.onMessage.addListener(
   (message, sender, sendResponse) => {
+    if (message.type === "VPBA_TOGGLE_SIDE_PANEL") {
+      (async () => {
+        try {
+          const tabId = sender?.tab?.id;
+          if (!tabId || !chrome.sidePanel) return sendResponse({ success: false });
+          await chrome.sidePanel.open({ tabId });
+          sendResponse({ success: true });
+        } catch (e) {
+          sendResponse({ success: false, error: e?.message });
+        }
+      })();
+      return true;
+    }
+
     if (message.type === "VPBA_START_SIDE_PANEL_TASK") {
       (async () => {
         try {
