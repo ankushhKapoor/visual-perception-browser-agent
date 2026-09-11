@@ -1,7 +1,61 @@
-const ANALYSIS_API_URL   = "http://127.0.0.1:8000/analyze";
-const PERCEPTION_API_URL = "http://127.0.0.1:8000/perception";
-const AGENT_TASK_API_URL = "http://127.0.0.1:8000/agent/task";
+// The browser now talks directly to server-vlm. The old :8000 backend is not
+// needed for agent chat, privacy redaction, or task execution.
+const DEFAULT_AGENT_TASK_API_URL = "http://127.0.0.1:9001/v1/agent";
+const VLM_AGENT_URL_STORAGE_KEY = "vpba_vlm_agent_url";
 const captureInProgressTabs = new Set();
+
+async function getAgentTaskApiUrl() {
+  const stored = await chrome.storage.local.get(VLM_AGENT_URL_STORAGE_KEY);
+  const candidate = String(stored[VLM_AGENT_URL_STORAGE_KEY] || DEFAULT_AGENT_TASK_API_URL).trim();
+  try {
+    const url = new URL(candidate);
+    if (!/^https?:$/.test(url.protocol)) throw new Error("unsupported protocol");
+    return url.toString();
+  } catch {
+    return DEFAULT_AGENT_TASK_API_URL;
+  }
+}
+
+function isInjectablePageUrl(url) {
+  return /^(https?|file):\/\//i.test(String(url || ""));
+}
+
+async function dispatchSidePanelTask(text) {
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (!tab?.id) throw new Error("No active webpage is available.");
+  if (!isInjectablePageUrl(tab.url)) {
+    throw new Error("The agent cannot run on Chrome internal, extension, or store pages.");
+  }
+
+  const send = () => chrome.tabs.sendMessage(tab.id, {
+    type: "VPBA_SIDEPANEL_TASK",
+    text: String(text || ""),
+  });
+
+  try {
+    return await send();
+  } catch (error) {
+    // A tab opened before the extension was reloaded does not contain its
+    // content scripts. Inject the same bundled runtime declared in the
+    // manifest, then retry once. Both scripts are idempotent on a live page.
+    if (!/Receiving end does not exist|Could not establish connection/i.test(error?.message || "")) {
+      throw error;
+    }
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      files: ["extensions/src/content.js", "extensions/src/chatbot.js"],
+    });
+    return await send();
+  }
+}
+
+async function dispatchSidePanelControl(type) {
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (!tab?.id || !isInjectablePageUrl(tab.url)) {
+    throw new Error("No controllable active webpage is available.");
+  }
+  return await chrome.tabs.sendMessage(tab.id, { type });
+}
 
 // Navigation continuations are intentionally stored in chrome.storage.session
 // so they disappear when the browser session ends. Content scripts run in an
@@ -99,80 +153,46 @@ if (chrome.sidePanel) {
     .catch(() => {});
 }
 
-async function sendImageForAnalysis(dataUrl, redactionRegions, privacyProof) {
-  if (
-    typeof dataUrl !== "string" ||
-    !dataUrl.startsWith("data:image/") ||
-    !privacyProof?.sanitized ||
-    privacyProof.rawScreenshotIncluded ||
-    !Array.isArray(privacyProof.redactionMap)
-  ) {
-    throw new Error("Privacy gate blocked screenshot transmission");
-  }
-
-  const response = await fetch(dataUrl);
-  const blob = await response.blob();
-
-  const formData = new FormData();
-
-  formData.append(
-    "image",
-    blob,
-    "sanitized_screenshot.png"
-  );
-  formData.append(
-    "redaction_regions",
-    JSON.stringify(redactionRegions || [])
-  );
-  formData.append(
-    "privacy_proof",
-    JSON.stringify(privacyProof)
-  );
-
-  const apiResponse = await fetch(
-    ANALYSIS_API_URL,
-    {
-      method: "POST",
-      body: formData
-    }
-  );
-
-  if (!apiResponse.ok) {
-    const errorText = await apiResponse.text();
-
-    throw new Error(
-      `API analysis failed: ${apiResponse.status} ${errorText}`
-    );
-  }
-
-  return await apiResponse.json();
-}
-
-async function sendBrowserPerceptionState(perceptionState) {
-  const apiResponse = await fetch(
-    PERCEPTION_API_URL,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(perceptionState)
-    }
-  );
-
-  if (!apiResponse.ok) {
-    const errorText = await apiResponse.text();
-
-    throw new Error(
-      `Perception API failed: ${apiResponse.status} ${errorText}`
-    );
-  }
-
-  return await apiResponse.json();
-}
-
 chrome.runtime.onMessage.addListener(
   (message, sender, sendResponse) => {
+    if (message.type === "VPBA_START_SIDE_PANEL_TASK") {
+      (async () => {
+        try {
+          const response = await dispatchSidePanelTask(message.text);
+          sendResponse(response?.success
+            ? response
+            : { success: false, error: response?.error || "Agent task could not start." });
+        } catch (error) {
+          sendResponse({ success: false, error: error?.message || String(error) });
+        }
+      })();
+      return true;
+    }
+
+    if (message.type === "VPBA_STOP_SIDE_PANEL_TASK") {
+      (async () => {
+        try {
+          const response = await dispatchSidePanelControl("VPBA_STOP_SIDE_PANEL_TASK");
+          sendResponse(response?.success ? response : { success: false, error: "No running agent task was found." });
+        } catch (error) {
+          sendResponse({ success: false, error: error?.message || String(error) });
+        }
+      })();
+      return true;
+    }
+
+    if (message.type === "VPBA_AGENT_STATUS" && !message.forwarded) {
+      // Forward the page runtime's real lifecycle state to the native panel.
+      chrome.runtime.sendMessage({
+        type: "VPBA_AGENT_STATUS",
+        phase: message.phase,
+        text: message.text,
+        active: Boolean(message.active),
+        forwarded: true,
+      }).catch(() => {});
+      return false;
+    }
+
     if (message.type === "CAPTURE_SCREENSHOT") {
       if (!sender.tab?.id) {
         sendResponse({ success: false, error: "Capture requires an active tab" });
@@ -220,73 +240,6 @@ chrome.runtime.onMessage.addListener(
       return false;
     }
 
-    if (
-      message.type ===
-      "SEND_SANITIZED_FOR_ANALYSIS"
-    ) {
-      if (
-        !sender.tab?.id ||
-        !message.privacyProof?.sanitized ||
-        message.privacyProof?.rawScreenshotIncluded ||
-        !Array.isArray(message.privacyProof?.redactionMap)
-      ) {
-        sendResponse({ success: false, error: "Privacy gate blocked unsanitized screenshot" });
-        return false;
-      }
-      (async () => {
-        try {
-          const analysis =
-            await sendImageForAnalysis(
-              message.screenshot,
-              message.redactionRegions,
-              message.privacyProof
-            );
-
-          sendResponse({
-            success: true,
-            analysis: analysis
-          });
-        } catch (error) {
-          sendResponse({
-            success: false,
-            error: error.message
-          });
-        }
-      })();
-
-      return true;
-    }
-
-    if (
-      message.type ===
-      "SEND_BROWSER_PERCEPTION"
-    ) {
-      if (!sender.tab?.id || !message.perceptionState?.privacy?.sanitized) {
-        sendResponse({ success: false, error: "Privacy gate blocked unsanitized perception" });
-        return false;
-      }
-      (async () => {
-        try {
-          const serverResponse =
-            await sendBrowserPerceptionState(
-              message.perceptionState
-            );
-
-          sendResponse({
-            success: true,
-            serverResponse: serverResponse
-          });
-        } catch (error) {
-          sendResponse({
-            success: false,
-            error: error.message
-          });
-        }
-      })();
-
-      return true;
-    }
-
     if (message.type === "GET_TAB_ID") {
       sendResponse({ tabId: sender.tab?.id ?? null });
       return false;
@@ -320,7 +273,8 @@ chrome.runtime.onMessage.addListener(
 
       (async () => {
         try {
-          const apiResponse = await fetch(AGENT_TASK_API_URL, {
+          const agentUrl = await getAgentTaskApiUrl();
+          const apiResponse = await fetch(agentUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(message.agentPayload)
@@ -328,7 +282,7 @@ chrome.runtime.onMessage.addListener(
 
           if (!apiResponse.ok) {
             const errText = await apiResponse.text();
-            throw new Error(`Agent API error: ${apiResponse.status} ${errText}`);
+            throw new Error(`VLM server error: ${apiResponse.status} ${errText}`);
           }
 
           const result = await apiResponse.json();

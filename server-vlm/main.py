@@ -470,7 +470,11 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://127.0.0.1:8000", "http://localhost:8000"],
+    # The MV3 extension calls this endpoint directly after browser-side
+    # redaction. Extension IDs differ per local unpacked build, so match the
+    # Chrome extension scheme instead of hard-coding an ID.
+    allow_origins=[],
+    allow_origin_regex=r"chrome-extension://.*",
     allow_methods=["POST", "GET"],
     allow_headers=["*"],
 )

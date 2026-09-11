@@ -14,7 +14,8 @@
   "host_permissions": [
     "<all_urls>",
     "file:///*",
-    "http://127.0.0.1:8000/*",
+    "http://127.0.0.1:9001/*",
+    "http://localhost:9001/*",
     "https://huggingface.co/*",
     "https://cdn.jsdelivr.net/*",
     "https://storage.googleapis.com/*"

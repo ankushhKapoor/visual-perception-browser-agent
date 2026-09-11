@@ -1204,7 +1204,7 @@ function createSanitizedPayload(
 
     domContext: {
       visibleText:
-        sanitizeText(
+        sanitizeVisibleText(
           pageContext.visibleText
         ),
 
@@ -1471,7 +1471,16 @@ function viewportRectFromImageRect(imageRect, imageWidth, imageHeight) {
   };
 }
 
-function getConsoleSafeScreenText(text) {
+/**
+ * Fully sanitizes visible page text for any context where it may leave the
+ * browser (model payload, console log). Applies:
+ *   1. Pattern-based PII redaction (sanitizeText) — emails, phone, govt IDs…
+ *   2. Structured-field name labels (e.g. "Full Name: John Smith")
+ *   3. DOB / address label patterns
+ *   4. Known person names harvested from form inputs
+ *   5. Active search-query person name (getPersonQuery)
+ */
+function sanitizeVisibleText(text) {
   let sanitizedText = sanitizeText(text)
     .replace(
       /\b(?:full|legal|customer|account\s+holder|beneficiary|profile)\s+name\s*[:\-]?\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3}\b/g,
@@ -1486,19 +1495,37 @@ function getConsoleSafeScreenText(text) {
       "<ADDRESS_1>"
     );
 
+  // Redact person names identified through labeled form inputs.
   for (const name of getKnownSensitivePersonNames()) {
     sanitizedText = sanitizedText.replace(
       new RegExp(`\\b${escapeRegExp(name)}\\b`, "gi"),
       "<PERSON_1>"
     );
   }
+
+  // Redact person names identified through an active search query so that
+  // the name is not leaked in the text payload even when no form input
+  // carries a "full name" label (e.g. Google Images person search).
+  const queryName = getPersonQuery();
+  if (queryName) {
+    sanitizedText = sanitizedText.replace(
+      new RegExp(`\\b${escapeRegExp(queryName)}\\b`, "gi"),
+      "<PERSON_1>"
+    );
+  }
+
   return sanitizedText;
+}
+
+// Kept for backward compatibility — delegates to the unified helper.
+function getConsoleSafeScreenText(text) {
+  return sanitizeVisibleText(text);
 }
 
 function logFinalSanitizedScreenContent(pageContext, redactionMap) {
   const categories = [...new Set(redactionMap.map((region) => region.category))];
   console.log("[VPBA privacy] Final sanitized screen content:", {
-    visibleText: getConsoleSafeScreenText(pageContext.visibleText),
+    visibleText: sanitizeVisibleText(pageContext.visibleText),
     redactedRegionCount: redactionMap.length,
     redactedCategories: categories,
   });
@@ -2795,7 +2822,14 @@ window.vpbaPrivacy = Object.freeze({
   redactScreenshot,
   createRedactionMap,
   assertSanitizedScreenshot,
+  sanitizeVisibleText,
 });
+
+// Export text-sanitization helpers on window so chatbot.js can use the full
+// pipeline (person-query redaction, form-name redaction, pattern PII) rather
+// than its own lightweight fallback regex set.
+window.sanitizeText = sanitizeText;
+window.sanitizeVisibleText = sanitizeVisibleText;
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type !== "START_ON_DEMAND_CAPTURE") {

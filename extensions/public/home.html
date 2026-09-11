@@ -17,15 +17,31 @@
     .agent { align-self: flex-start; background: #161b22; border: 1px solid #30363d; }
     .empty { border: 1px dashed #30363d; padding: 22px; border-radius: 12px; color: #8b949e; }
     .note { margin-top: 18px; padding: 12px; border: 1px solid rgba(124,58,237,.35); border-radius: 10px; background: rgba(124,58,237,.08); color: #c4b5fd; }
+    #agent-status { display: flex; align-items: center; gap: 9px; min-height: 34px; margin: 12px 0 2px; padding: 8px 10px; border: 1px solid #30363d; border-radius: 9px; background: #0d131c; color: #94a3b8; font-size: 12px; }
+    #agent-status.active { border-color: rgba(124,58,237,.7); color: #ddd6fe; }
+    #agent-status-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; background: #64748b; }
+    #agent-status.active #agent-status-dot { background: #a78bfa; animation: agent-pulse 1.15s ease-in-out infinite; }
+    #agent-status.active #agent-status-text::after { content: "…"; display: inline-block; width: 1.2em; overflow: hidden; vertical-align: bottom; animation: agent-ellipsis 1.1s steps(4,end) infinite; }
+    @keyframes agent-pulse { 50% { transform: scale(.55); opacity: .45; } }
+    @keyframes agent-ellipsis { from { width: 0; } to { width: 1.2em; } }
     #privacy-status { display: none; margin-top: 10px; padding: 9px 11px; border-radius: 8px; background: #0c2436; color: #bae6fd; font-size: 12px; }
     #privacy-status.visible { display: block; }
     .agent .vsrc-preview { display: none; }
     #composer { display: flex; gap: 8px; margin-top: auto; padding-top: 18px; position: sticky; bottom: 0; background: #090d13; }
     #intent { flex: 1; min-height: 42px; resize: vertical; border: 1px solid #7c3aed; border-radius: 9px; background: #161b22; color: #e6edf3; padding: 10px; font: inherit; }
-    #send, #privacy-scan { border: 0; border-radius: 9px; color: white; cursor: pointer; font: inherit; }
+    #send, #privacy-scan, #refresh-agent, #stop-agent { border: 0; border-radius: 9px; color: white; cursor: pointer; font: inherit; }
     #send { width: 46px; background: #7c3aed; font-size: 18px; }
     #privacy-scan { background: #075985; padding: 0 12px; white-space: nowrap; }
+    #refresh-agent { width: 38px; background: #30363d; font-size: 18px; }
+    #stop-agent { display: none; width: 42px; background: #b91c1c; font-size: 15px; }
+    #stop-agent.visible { display: inline-block; }
     #send:disabled, #privacy-scan:disabled, #intent:disabled { opacity: .55; cursor: wait; }
+    #vlm-settings { margin-top: 12px; color: #8b949e; font-size: 12px; }
+    #vlm-settings summary { cursor: pointer; }
+    #vlm-config { display: flex; gap: 6px; margin-top: 8px; }
+    #vlm-endpoint { flex: 1; min-width: 0; border: 1px solid #30363d; border-radius: 7px; background: #161b22; color: #e6edf3; padding: 7px; font: inherit; }
+    #save-vlm { border: 0; border-radius: 7px; padding: 0 9px; background: #30363d; color: #e6edf3; cursor: pointer; font: inherit; }
+    #vlm-status { display: block; margin-top: 5px; color: #94a3b8; }
   </style>
 </head>
 <body>
@@ -33,14 +49,25 @@
     <h1>Visual Agent</h1>
     <p>Persistent browser-wide chat. Each task uses only the sanitized context of the active page.</p>
     <section id="history" aria-live="polite"></section>
+    <div id="agent-status" aria-live="polite"><span id="agent-status-dot"></span><span id="agent-status-text">Ready</span></div>
     <div class="note">This panel remains open while websites change. Search tasks automatically inspect updated results before selecting the final result.</div>
     <div id="privacy-status" aria-live="polite"></div>
+    <details id="vlm-settings">
+      <summary>VLM connection</summary>
+      <div id="vlm-config">
+        <input id="vlm-endpoint" type="url" spellcheck="false" aria-label="VLM agent endpoint" placeholder="https://your-vlm.example/v1/agent">
+        <button id="save-vlm" type="button">Save</button>
+      </div>
+      <span id="vlm-status">Privacy stays in the browser; only sanitized context is sent to this endpoint.</span>
+    </details>
     <div id="composer">
       <textarea id="intent" rows="1" placeholder="Ask anything or describe a task..."></textarea>
+      <button id="refresh-agent" type="button" title="Start a fresh agent conversation" aria-label="Refresh agent">↻</button>
       <button id="privacy-scan" title="Run local privacy scan only">Privacy scan</button>
+      <button id="stop-agent" type="button" title="Stop current task" aria-label="Stop current task">■</button>
       <button id="send" title="Send task">Send</button>
     </div>
   </main>
-  <script src="home.js"></script>
+  <script type="module" src="home.js"></script>
 </body>
 </html>

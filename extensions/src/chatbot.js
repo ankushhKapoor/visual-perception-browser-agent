@@ -1,5 +1,5 @@
 /**
- * chatbot.js v2 — Visual Perception Agent Side Panel
+ * chatbot.js v2 — page-local Visual Perception Agent runtime
  *
  * Improvements over v1:
  *  1. Browser-wide history persists across tabs, reloads, and restarts (chrome.storage.local)
@@ -23,10 +23,9 @@
   const MAX_ELEMS = 60;
   const MAX_TEXT  = 3000;
   const MAX_HIST  = 60;
-  // A task may use one plan for the current page and one plan after a page
-  // transition.  Keeping this hard limit local prevents screenshot fallbacks
-  // from silently turning a two-call task into three or four model calls.
-  const MAX_AGENT_CALLS_PER_TASK = 2;
+  // A task may need a fresh plan after several navigation or SPA transitions.
+  // Keep the budget explicit so a stalled site cannot create unbounded calls.
+  const MAX_AGENT_CALLS_PER_TASK = 7;
   const BROWSER_HISTORY_KEY = "vpba_browser_history_v1";
   // Both the conversation and panel visibility are browser-wide. A tab-scoped
   // panel flag was unreliable during document replacement because a content
@@ -353,13 +352,23 @@
   </div>
   `;
 
-  // ── Inject ─────────────────────────────────────────────────────────────────
+  // ── Create a headless runtime surface ──────────────────────────────────────
+  // The native Chrome side panel is the only visible chat UI. It reduces the
+  // webpage viewport itself, unlike a fixed DOM overlay. This page-local
+  // runtime deliberately remains hidden because it owns the live DOM element
+  // map and execution code required to carry out approved agent tasks.
+  //
+  // Keep its existing message and task machinery intact: the native panel
+  // delegates VPBA_SIDEPANEL_TASK here, and this runtime persists responses to
+  // chrome.storage.local for the native panel to render.
   const styleEl = document.createElement("style");
   styleEl.textContent = css;
   (document.head || document.documentElement).appendChild(styleEl);
 
   const rootEl = document.createElement("div");
   rootEl.id = "vpba-root";
+  rootEl.setAttribute("aria-hidden", "true");
+  rootEl.style.setProperty("display", "none", "important");
   rootEl.innerHTML = html;
   document.body.appendChild(rootEl);
 
@@ -553,6 +562,21 @@
     sendB.title = v ? "Stop agent" : "Send task";
     inp.disabled = v;
     setStatus(v ? "run" : "ok");
+    if (!v) reportAgentStatus("idle", "Ready", false);
+  }
+
+  // The native side panel is the visible UI. Emit only concrete lifecycle
+  // transitions from this page-local runtime so its progress text describes
+  // what the agent is actually doing.
+  function reportAgentStatus(phase, text, active) {
+    try {
+      chrome.runtime.sendMessage({
+        type: "VPBA_AGENT_STATUS",
+        phase,
+        text,
+        active: Boolean(active),
+      }).catch(() => {});
+    } catch (_) {}
   }
 
   function stopActiveTask() {
@@ -562,6 +586,7 @@
     // cancelled while its page was loading.
     if (myTabId != null) sessionRemove(`${NAVIGATION_STATE_PREFIX}${myTabId}`);
     setProcessing(false);
+    reportAgentStatus("stopped", "Task stopped", false);
   }
 
   function ensureNotCancelled() {
@@ -575,6 +600,7 @@
     // Use the fuller local PII classifier from content.js when it is loaded;
     // it covers credentials, OTPs, tokens and IDs in addition to this
     // panel's lightweight fallback patterns.
+    if (typeof window.sanitizeVisibleText === "function") return window.sanitizeVisibleText(s);
     if (typeof window.sanitizeText === "function") return window.sanitizeText(s);
     PII_RE.forEach(p => { s = s.replace(p, "<REDACTED>"); });
     return s;
@@ -655,7 +681,13 @@
       };
     });
 
-    const visibleText = sanitize(
+    // Prefer the richer sanitizer from content.js (sanitizeVisibleText) which
+    // also redacts person-query names and form-based person names. Fall back to
+    // the basic sanitize() if content.js hasn't loaded yet.
+    const sanitizeVT = typeof window.sanitizeVisibleText === "function"
+      ? window.sanitizeVisibleText
+      : sanitize;
+    const visibleText = sanitizeVT(
       (document.body?.innerText || "").replace(/\s+/g, " ").trim().slice(0, MAX_TEXT)
     );
 
@@ -727,6 +759,9 @@
   async function callAgent(intent, forceImage = false) {
     ensureNotCancelled();
     if (!extensionContextAvailable()) throw extensionReloadError();
+    reportAgentStatus("sanitizing", forceImage
+      ? "Preparing sanitized page context and screenshot…"
+      : "Preparing sanitized page context…", true);
     const ctx = getPageContext();
     // Text-first applies to tasks as well as questions. This keeps hosted API
     // cost down; the model can return requires_screenshot:true and the retry
@@ -734,6 +769,7 @@
     const sendImage = forceImage;
     const image = sendImage ? await captureSanitizedImage() : null;
 
+    reportAgentStatus("vlm", "Waiting for VLM response…", true);
     return new Promise((resolve, reject) => {
       try {
         chrome.runtime.sendMessage({
@@ -1552,6 +1588,11 @@
     for (let index = 0; index < steps.length; index++) {
       if (taskCancelled) return { success: false, completedSteps: done, error: "Stopped by user" };
       const step = steps[index];
+      reportAgentStatus(
+        "executing",
+        `Executing step ${step.step} of ${steps.length}: ${step.description || step.action}`,
+        true
+      );
       onProg(step.step, steps.length, "running");
       const fn = ACTION[step.action];
       if (!fn) {
@@ -1646,9 +1687,8 @@
         }
         ensureNotCancelled();
         const followUpIntent = continuationIntent(saved.intent, saved.completed);
-        // The second and final result-selection phase always receives fresh
-        // DOM plus a locally redacted image. This applies to every supported
-        // search site, not just YouTube, and avoids a third retry call.
+        // Every continuation phase receives fresh DOM plus a locally redacted
+        // image. This applies to every supported search site, not just YouTube.
         const next = await callAgent(followUpIntent, true);
         if (!Array.isArray(next.tasks?.tasks) || !next.tasks.tasks.length) {
           if (await clickYoutubeFinalResult(saved.intent)) {
@@ -1737,9 +1777,7 @@
     const handle = addAgent(); // shows thinking dots
     setProcessing(true);
 
-    // Action tasks always include a locally redacted image on their first
-    // call.  The second (and final) call is reserved for fresh page state
-    // after navigation; do not spend an unbounded retry on the same page.
+    // Action tasks include a locally redacted image on their first call.
     let result;
     let tries = 1;
     try {
@@ -1749,12 +1787,13 @@
       const isConn = /connect|fetch|network|tunnel|econnrefused/i.test(msg);
       handle.set(`<div class="verr">${esc(msg)}${isConn ? `
         <div class="verr-help">
-          • Check tunnel: <code>curl http://localhost:9001/health</code><br>
-          • Check backend: <code>curl http://127.0.0.1:8000/health</code>
+          • Check VLM server: <code>curl http://127.0.0.1:9001/health</code><br>
+          • The extension sends only browser-sanitized content directly to <code>/v1/agent</code>
         </div>` : ""}</div>`);
       handle.save();
       setProcessing(false);
       setStatus("err");
+      reportAgentStatus("error", "VLM request failed", false);
       return;
     }
 
@@ -1778,6 +1817,7 @@
       appendSourcePill(handle, result);
       handle.save();
       setProcessing(false);
+      reportAgentStatus("complete", "Response complete", false);
       return;
     }
 
@@ -1797,9 +1837,11 @@
       appendSourcePill(handle, result);
       handle.save();
       setProcessing(false);
+      reportAgentStatus("confirmation", "Awaiting your confirmation", false);
 
       document.getElementById("vpba-yes").addEventListener("click", async () => {
         setProcessing(true);
+        reportAgentStatus("executing", "Executing confirmed task…", true);
         renderTasks(handle, tasks);
         // The confirmed plan can also navigate away from this document.
         handle.save();
@@ -1818,6 +1860,7 @@
         handle.set(`<div style="color:#8b949e;font-size:12px">Cancelled.</div>`);
         handle.save();
         setProcessing(false);
+        reportAgentStatus("stopped", "Task cancelled", false);
       });
       return;
     }
@@ -1832,12 +1875,12 @@
 
     // SPA searches (for example YouTube) do not replace the document. Re-plan
     // from their fresh DOM only when Gemini explicitly marks the phase
-    // incomplete. One follow-up plus the initial plan is the task-wide API
-    // budget; a further loop would violate the two-call contract.
+    // incomplete. The explicit task-wide budget limits retries to prevent an
+    // endlessly changing page from producing unbounded VLM calls.
     let followUp = 0;
     while (execResult.success && !execResult.navigating && needsFreshResultPlan(tasks) && followUp < MAX_AGENT_CALLS_PER_TASK - 1) {
       followUp++;
-      handle.append(`<div class="vretry" style="margin-top:6px">Checking updated results (phase ${followUp + 1}/2)...</div>`);
+      handle.append(`<div class="vretry" style="margin-top:6px">Checking updated results (phase ${followUp + 1}/${MAX_AGENT_CALLS_PER_TASK})...</div>`);
       try {
         const followUpIntent = continuationIntent(text, tasks.tasks);
         const next = await callAgent(followUpIntent, true);
@@ -1858,7 +1901,7 @@
       }
     }
     if (execResult.success && !execResult.navigating && needsFreshResultPlan(tasks)) {
-      execResult = { success: false, completedSteps: execResult.completedSteps, error: "Task still needs another page change after the two-call limit." };
+      execResult = { success: false, completedSteps: execResult.completedSteps, error: `Task still needs another page change after the ${MAX_AGENT_CALLS_PER_TASK}-call limit.` };
     }
 
     appendSourcePill(handle, result);
@@ -1868,6 +1911,7 @@
       setStatus("err");
     }
     handle.save();
+    reportAgentStatus(execResult.success ? "complete" : "error", execResult.success ? "Task complete" : "Task stopped", false);
   }
 
   // ── Input events ──────────────────────────────────────────────────────────
@@ -1883,6 +1927,11 @@
   // The persistent native side panel delegates execution to this page-bound
   // agent, which is the only component allowed to read the page DOM.
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message.type === "VPBA_STOP_SIDE_PANEL_TASK") {
+      stopActiveTask();
+      sendResponse({ success: true });
+      return false;
+    }
     if (message.type !== "VPBA_SIDEPANEL_TASK") return false;
     if (processing) {
       sendResponse({ success: false, error: "An agent task is already running." });

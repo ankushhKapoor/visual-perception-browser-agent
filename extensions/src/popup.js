@@ -11,8 +11,6 @@
  *  7. Show per-step progress
  */
 
-const BACKEND_AGENT_URL = "http://127.0.0.1:8000/agent/task";
-
 /* ─── DOM refs ─── */
 const intentInput    = document.getElementById("intentInput");
 const runBtn         = document.getElementById("runBtn");
