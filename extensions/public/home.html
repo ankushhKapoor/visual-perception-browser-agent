@@ -17,11 +17,15 @@
     .agent { align-self: flex-start; background: #161b22; border: 1px solid #30363d; }
     .empty { border: 1px dashed #30363d; padding: 22px; border-radius: 12px; color: #8b949e; }
     .note { margin-top: 18px; padding: 12px; border: 1px solid rgba(124,58,237,.35); border-radius: 10px; background: rgba(124,58,237,.08); color: #c4b5fd; }
+    #privacy-status { display: none; margin-top: 10px; padding: 9px 11px; border-radius: 8px; background: #0c2436; color: #bae6fd; font-size: 12px; }
+    #privacy-status.visible { display: block; }
     .agent .vsrc-preview { display: none; }
     #composer { display: flex; gap: 8px; margin-top: auto; padding-top: 18px; position: sticky; bottom: 0; background: #090d13; }
     #intent { flex: 1; min-height: 42px; resize: vertical; border: 1px solid #7c3aed; border-radius: 9px; background: #161b22; color: #e6edf3; padding: 10px; font: inherit; }
-    #send { width: 46px; border: 0; border-radius: 9px; background: #7c3aed; color: white; cursor: pointer; font-size: 18px; }
-    #send:disabled, #intent:disabled { opacity: .55; cursor: wait; }
+    #send, #privacy-scan { border: 0; border-radius: 9px; color: white; cursor: pointer; font: inherit; }
+    #send { width: 46px; background: #7c3aed; font-size: 18px; }
+    #privacy-scan { background: #075985; padding: 0 12px; white-space: nowrap; }
+    #send:disabled, #privacy-scan:disabled, #intent:disabled { opacity: .55; cursor: wait; }
   </style>
 </head>
 <body>
@@ -30,8 +34,10 @@
     <p>Persistent browser-wide chat. Each task uses only the sanitized context of the active page.</p>
     <section id="history" aria-live="polite"></section>
     <div class="note">This panel remains open while websites change. Search tasks automatically inspect updated results before selecting the final result.</div>
+    <div id="privacy-status" aria-live="polite"></div>
     <div id="composer">
       <textarea id="intent" rows="1" placeholder="Ask anything or describe a task..."></textarea>
+      <button id="privacy-scan" title="Run local privacy scan only">Privacy scan</button>
       <button id="send" title="Send task">Send</button>
     </div>
   </main>

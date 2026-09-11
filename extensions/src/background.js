@@ -341,6 +341,51 @@ chrome.runtime.onMessage.addListener(
       return true;
     }
 
+    if (message.type === "SAVE_PRIVACY_DEBUG_ARTIFACTS") {
+      const { originalScreenshot, sanitizedScreenshot, captureId } = message;
+      if (
+        !sender.tab?.id ||
+        !String(originalScreenshot || "").startsWith("data:image/") ||
+        !String(sanitizedScreenshot || "").startsWith("data:image/")
+      ) {
+        sendResponse({ success: false, error: "Invalid privacy debug artifacts" });
+        return false;
+      }
+
+      const folder = "VPBA Privacy Debug";
+      chrome.downloads.download({
+        url: originalScreenshot,
+        filename: `${folder}/${captureId}-original.png`,
+        saveAs: false,
+      }, (originalDownloadId) => {
+        if (chrome.runtime.lastError) {
+          sendResponse({ success: false, error: chrome.runtime.lastError.message });
+          return;
+        }
+        chrome.downloads.download({
+          url: sanitizedScreenshot,
+          filename: `${folder}/${captureId}-sanitized.png`,
+          saveAs: false,
+        }, (sanitizedDownloadId) => {
+          if (chrome.runtime.lastError) {
+            sendResponse({ success: false, error: chrome.runtime.lastError.message });
+            return;
+          }
+          sendResponse({ success: true, originalDownloadId, sanitizedDownloadId });
+        });
+      });
+      return true;
+    }
+
+    if (message.type === "VPBA_PRIVACY_SCAN_PROGRESS") {
+      // Forward browser-only model download/inference status to the side panel.
+      chrome.runtime.sendMessage({
+        type: "VPBA_PRIVACY_SCAN_PROGRESS",
+        text: String(message.text || "Preparing local privacy scan…"),
+      }).catch(() => {});
+      return false;
+    }
+
     if (message.type === "OPEN_NEW_TAB") {
       const url = message.url || "about:blank";
       chrome.tabs.create({ url, active: true }, (tab) => {

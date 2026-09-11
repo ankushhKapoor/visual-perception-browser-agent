@@ -24,5 +24,9 @@
   "devDependencies": {
     "@crxjs/vite-plugin": "^2.7.1",
     "vite": "^8.2.2"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "^1.0.1",
+    "tesseract.js": "^6.0.1"
   }
 }

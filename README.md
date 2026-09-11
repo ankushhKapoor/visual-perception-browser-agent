@@ -127,6 +127,21 @@ Detected information can include:
 
 ---
 
+## Browser-side privacy vision
+
+The extension now performs screenshot privacy processing before it communicates
+with a server. `local-vision-privacy.js` uses Transformers.js with ONNX Runtime
+Web (WebGPU when available, WASM otherwise) for local object detection and OCR,
+and MediaPipe Tasks Vision (WASM) for face detection. DOM PII matches and model
+regions are merged, then redacted on a browser canvas. Raw screenshots and OCR
+text never enter a request payload.
+
+The first use downloads the public model assets to the browser cache; inference
+itself remains local. FastAPI's OpenCV redaction remains enabled as a
+defence-in-depth alternative for an already-sanitized image.
+
+---
+
 ## Browser Perception State
 
 The browser and visual information are combined into a structured perception state.
