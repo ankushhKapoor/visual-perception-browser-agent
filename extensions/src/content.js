@@ -1531,6 +1531,18 @@ function logFinalSanitizedScreenContent(pageContext, redactionMap) {
   });
 }
 
+function publishSanitizedPreview(pageContext, sanitizedScreenshot, label) {
+  // Ephemeral side-panel inspection only: no storage, downloads, or raw image.
+  chrome.runtime.sendMessage({
+    type: "VPBA_SANITIZED_PREVIEW",
+    preview: {
+      label,
+      sanitizedText: getConsoleSafeScreenText(pageContext.visibleText),
+      sanitizedImage: sanitizedScreenshot,
+    },
+  }).catch(() => {});
+}
+
 // This is the only screenshot preparation path used by the extension. Model
 // input remains in the browser, while this function returns only a redacted
 // image and non-sensitive detection summaries for later server communication.
@@ -2831,6 +2843,11 @@ window.vpbaPrivacy = Object.freeze({
 window.sanitizeText = sanitizeText;
 window.sanitizeVisibleText = sanitizeVisibleText;
 
+// Export the full client-side capture pipeline so chatbot.js can run
+// MediaPipe face detection + OCR before sending an image to the VLM.
+// The raw screenshot is held only for this local redaction step.
+window.vpbaPrepareCapture = prepareClientSanitizedCapture;
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type !== "START_ON_DEMAND_CAPTURE") {
     return false;
@@ -2868,6 +2885,13 @@ async function runLocalPrivacyScan(reason) {
     const screenshot = await captureVisibleScreenshot();
     const clientCapture = await prepareClientSanitizedCapture(pageContext, screenshot);
     const summary = clientCapture.analysis.detection_summary;
+    if (reason === "manual request") {
+      publishSanitizedPreview(
+        clientCapture.pageContext,
+        clientCapture.sanitizedScreenshot,
+        "Sanitized text and image from the privacy scan"
+      );
+    }
     lastLocalPrivacyScanAt = Date.now();
     return {
       redactedRegions: clientCapture.redactionMap.length,

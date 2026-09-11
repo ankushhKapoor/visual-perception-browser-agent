@@ -21,10 +21,31 @@ function isInjectablePageUrl(url) {
 }
 
 async function dispatchSidePanelTask(text) {
-  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  if (!tab?.id) throw new Error("No active webpage is available.");
+  // Prefer the active tab in the focused window. If that tab is a Chrome
+  // internal / extension page (e.g. the new-tab override or chrome://extensions),
+  // fall back to the most recently accessed injectable tab across all windows so
+  // the user doesn't have to manually switch away before sending a task.
+  let [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+
+  if (!tab?.id || !isInjectablePageUrl(tab.url)) {
+    // Try: any active tab in any window that is injectable.
+    const activeTabs = await chrome.tabs.query({ active: true });
+    tab = activeTabs.find(t => isInjectablePageUrl(t.url));
+  }
+
+  if (!tab?.id || !isInjectablePageUrl(tab.url)) {
+    // Last resort: most recently accessed injectable tab across all tabs.
+    const allTabs = await chrome.tabs.query({});
+    tab = allTabs
+      .filter(t => isInjectablePageUrl(t.url))
+      .sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0))[0];
+  }
+
+  if (!tab?.id) {
+    throw new Error("No active webpage is available. Open a website first, then send the task.");
+  }
   if (!isInjectablePageUrl(tab.url)) {
-    throw new Error("The agent cannot run on Chrome internal, extension, or store pages.");
+    throw new Error("The agent cannot run on Chrome internal, extension, or store pages. Navigate to a website first.");
   }
 
   const send = () => chrome.tabs.sendMessage(tab.id, {
@@ -54,7 +75,18 @@ async function dispatchSidePanelControl(type) {
   if (!tab?.id || !isInjectablePageUrl(tab.url)) {
     throw new Error("No controllable active webpage is available.");
   }
-  return await chrome.tabs.sendMessage(tab.id, { type });
+  try {
+    return await chrome.tabs.sendMessage(tab.id, { type });
+  } catch (error) {
+    if (!/Receiving end does not exist|Could not establish connection/i.test(error?.message || "")) {
+      throw error;
+    }
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      files: ["extensions/src/content.js", "extensions/src/chatbot.js"],
+    });
+    return await chrome.tabs.sendMessage(tab.id, { type });
+  }
 }
 
 // Navigation continuations are intentionally stored in chrome.storage.session
@@ -181,6 +213,20 @@ chrome.runtime.onMessage.addListener(
       return true;
     }
 
+    if (message.type === "VPBA_RUN_LOCAL_PRIVACY_SCAN") {
+      (async () => {
+        try {
+          const response = await dispatchSidePanelControl("RUN_LOCAL_PRIVACY_SCAN");
+          sendResponse(response?.success
+            ? response
+            : { success: false, error: response?.error || "Local privacy scan failed." });
+        } catch (error) {
+          sendResponse({ success: false, error: error?.message || String(error) });
+        }
+      })();
+      return true;
+    }
+
     if (message.type === "VPBA_AGENT_STATUS" && !message.forwarded) {
       // Forward the page runtime's real lifecycle state to the native panel.
       chrome.runtime.sendMessage({
@@ -188,6 +234,18 @@ chrome.runtime.onMessage.addListener(
         phase: message.phase,
         text: message.text,
         active: Boolean(message.active),
+        forwarded: true,
+      }).catch(() => {});
+      return false;
+    }
+
+    if (message.type === "VPBA_SANITIZED_PREVIEW" && !message.forwarded) {
+      // Forward to an open native side panel only. The service worker does not
+      // retain preview data, so it disappears when the panel discards it or
+      // the extension context is torn down.
+      chrome.runtime.sendMessage({
+        type: "VPBA_SANITIZED_PREVIEW",
+        preview: message.preview,
         forwarded: true,
       }).catch(() => {});
       return false;

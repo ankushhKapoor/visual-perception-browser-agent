@@ -144,8 +144,8 @@
 
   /* ── Messages ── */
   #vpba-msgs {
-    flex: 1; overflow-y: auto; padding: 12px 11px;
-    display: flex; flex-direction: column; gap: 9px;
+    flex: 1; overflow-y: auto; padding: 10px 10px;
+    display: flex; flex-direction: column; gap: 6px;
   }
   #vpba-msgs::-webkit-scrollbar { width: 3px; }
   #vpba-msgs::-webkit-scrollbar-thumb { background: rgba(255,255,255,.08); border-radius: 2px; }
@@ -155,17 +155,17 @@
   .vm.a { align-self: flex-start; align-items: flex-start; }
 
   .vb {
-    padding: 9px 12px; border-radius: 12px;
-    font-size: 12.5px; line-height: 1.55; word-break: break-word; white-space: pre-wrap;
+    padding: 9px 12px; border-radius: 13px;
+    font-size: 13px; line-height: 1.55; word-break: break-word; white-space: pre-wrap;
   }
   .vm.u .vb {
     background: linear-gradient(135deg,#7c3aed,#2563eb);
-    color: #fff; border-bottom-right-radius: 4px;
+    color: #fff; border-bottom-right-radius: 5px;
   }
   .vm.a .vb {
     background: rgba(22,27,34,.85);
     border: 1px solid rgba(48,54,61,.55);
-    color: #e6edf3; border-bottom-left-radius: 4px;
+    color: #e6edf3; border-bottom-left-radius: 5px;
   }
   .vts { font-size: 10px; color: #6e7681; margin-top: 3px; padding: 0 2px; }
 
@@ -181,38 +181,38 @@
 
   /* tasks card */
   .vtasks {
-    margin-top: 7px;
+    margin-top: 8px;
     background: rgba(10,14,20,.7);
     border: 1px solid rgba(48,54,61,.5);
-    border-radius: 9px; overflow: hidden; font-size: 11.5px;
+    border-radius: 10px; overflow: hidden; font-size: 12.5px;
   }
   .vtasks-hdr {
-    padding: 7px 11px;
+    padding: 8px 12px;
     background: rgba(124,58,237,.1);
     border-bottom: 1px solid rgba(48,54,61,.4);
     font-weight: 700; color: #a78bfa;
-    font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em;
+    font-size: 11px; text-transform: uppercase; letter-spacing: .07em;
   }
-  .vprog { height: 2px; background: rgba(48,54,61,.4); margin: 0 11px 0; }
+  .vprog { height: 3px; background: rgba(48,54,61,.4); margin: 0 12px; }
   .vprog-bar {
     height: 100%; width: 0%;
     background: linear-gradient(90deg,#7c3aed,#a78bfa);
-    border-radius: 1px; transition: width .3s ease;
+    border-radius: 2px; transition: width .3s ease;
   }
   .vstep {
-    display: flex; align-items: flex-start; gap: 8px;
-    padding: 7px 11px; border-bottom: 1px solid rgba(48,54,61,.25);
-    color: #6e7681; transition: color .2s;
+    display: flex; align-items: flex-start; gap: 9px;
+    padding: 8px 12px; border-bottom: 1px solid rgba(48,54,61,.25);
+    color: #6e7681; transition: color .2s; line-height: 1.45;
   }
   .vstep:last-child { border-bottom: none; }
   .vstep.running { color: #fbbf24; }
   .vstep.done    { color: #22c55e; }
   .vstep.fail    { color: #f87171; }
-  .vstep-ic { flex-shrink: 0; width: 13px; text-align: center; }
-  .vstep-tx { flex: 1; line-height: 1.4; }
+  .vstep-ic { flex-shrink: 0; width: 14px; text-align: center; margin-top: 1px; }
+  .vstep-tx { flex: 1; line-height: 1.5; font-size: 12px; }
 
   /* answer plain text */
-  .vans { color: #e6edf3; line-height: 1.6; font-size: 12.5px; }
+  .vans { color: #e6edf3; line-height: 1.65; font-size: 13px; }
 
   /* error */
   .verr {
@@ -227,20 +227,23 @@
 
   /* confirm */
   .vconf {
-    margin-top: 7px;
+    margin-top: 8px;
     background: rgba(251,191,36,.06); border: 1px solid rgba(251,191,36,.22);
-    border-radius: 9px; padding: 10px 12px;
+    border-radius: 10px; padding: 11px 13px;
   }
-  .vconf-title { font-size: 11.5px; font-weight: 700; color: #fbbf24; }
-  .vconf-reason { font-size: 11px; color: #8b949e; margin-top: 3px; }
-  .vconf-actions { display: flex; gap: 7px; margin-top: 9px; }
+  .vconf-title { font-size: 12px; font-weight: 700; color: #fbbf24; }
+  .vconf-reason { font-size: 11.5px; color: #8b949e; margin-top: 4px; line-height: 1.5; }
+  .vconf-actions { display: flex; gap: 8px; margin-top: 10px; }
   .vbtn {
-    flex: 1; padding: 7px 0; border-radius: 7px; border: none;
-    font-size: 11.5px; font-weight: 700; cursor: pointer; transition: opacity .15s;
+    flex: 1; padding: 8px 0; border-radius: 8px; border: 1.5px solid transparent;
+    font-size: 12px; font-weight: 700; cursor: pointer;
+    transition: opacity .15s, transform .1s, box-shadow .15s;
+    box-shadow: 0 1px 4px rgba(0,0,0,.35);
   }
-  .vbtn:hover{opacity:.8}
-  .vbtn-go { background: #22c55e; color: #000; }
-  .vbtn-no { background: rgba(48,54,61,.8); color: #e6edf3; }
+  .vbtn:hover { opacity: .9; transform: translateY(-1px); box-shadow: 0 3px 10px rgba(0,0,0,.4); }
+  .vbtn:active { transform: scale(.96); box-shadow: none; }
+  .vbtn-go { background: #22c55e; color: #000; border-color: #16a34a; }
+  .vbtn-no { background: rgba(48,54,61,.9); color: #e6edf3; border-color: rgba(75,85,99,.6); }
 
   /* context pill */
   .vctx {
@@ -252,17 +255,27 @@
   }
 
   /* ── Source transparency pill ── */
-  .vsrc { margin-top: 7px; font-size: 10.5px; }
+  .vsrc { margin-top: 5px; font-size: 10.5px; }
+  .vsrc-lat { display:inline-block; margin-top:5px; font-size:10.5px; color:var(--quiet,#6b6964); letter-spacing:.01em; }
   .vsrc > summary {
     cursor: pointer; color: #6e7681; list-style: none;
     background: rgba(22,27,34,.6); border: 1px solid rgba(48,54,61,.35);
-    border-radius: 6px; padding: 4px 9px;
+    border-radius: 6px; padding: 3px 8px;
     display: inline-flex; align-items: center; gap: 5px;
     user-select: none; transition: color .15s, background .15s;
+    font-size: 10px;
   }
   .vsrc > summary::-webkit-details-marker { display: none; }
   .vsrc > summary:hover { color: #c9d1d9; background: rgba(22,27,34,.95); }
   .vsrc[open] > summary { border-radius: 6px 6px 0 0; border-bottom-color: transparent; }
+  /* nested collapsible sections for text / image inside the pill */
+  .vsrc-sub { margin-top: 5px; }
+  .vsrc-sub > summary {
+    cursor: pointer; list-style: none; color: #8b949e; font-size: 10px;
+    padding: 2px 0; user-select: none; display: inline-flex; align-items: center; gap: 4px;
+  }
+  .vsrc-sub > summary::-webkit-details-marker { display: none; }
+  .vsrc-sub > summary:hover { color: #c9d1d9; }
   .vsrc-body {
     background: rgba(10,14,20,.55); border: 1px solid rgba(48,54,61,.35);
     border-top: none; border-radius: 0 0 6px 6px;
@@ -582,6 +595,8 @@
   function stopActiveTask() {
     if (!processing) return;
     taskCancelled = true;
+    // Signal the local ML pipeline loops to abort between tiles.
+    window.vpbaCancelCapture = true;
     // A navigation continuation must not resurrect a task that the user
     // cancelled while its page was loading.
     if (myTabId != null) sessionRemove(`${NAVIGATION_STATE_PREFIX}${myTabId}`);
@@ -728,8 +743,7 @@
     return null;
   }
 
-  // ── Screenshot via background.js ─────────────────────────────────────────────
-  async function captureSanitizedImage() {
+  async function screenshotRaw() {
     return new Promise(resolve => {
       try {
         if (!extensionContextAvailable()) return resolve(null);
@@ -738,21 +752,81 @@
           resolve(res.screenshot);
         });
       } catch { resolve(null); }
-    }).then(async rawScreenshot => {
-      if (!rawScreenshot) return null;
-      // content.js provides the local redactor. Never fall back to a raw image.
-      const privacy = await getPrivacyPipeline();
-      if (!privacy) {
-        return null;
-      }
-      const pageContext = privacy.extractPageContext();
-      const { redactScreenshot: redact, createRedactionMap: makeMap, assertSanitizedScreenshot: assertSanitized } = privacy;
-      const sensitive = pageContext.sensitiveElements || [];
-      const redactionMap = makeMap(sensitive);
-      const dataUrl = await redact(rawScreenshot, sensitive);
-      assertSanitized(dataUrl, redactionMap);
-      return { dataUrl, b64: dataUrl.replace(/^data:image\/\w+;base64,/, ""), redactionMap };
     });
+  }
+
+  async function sanitizeTile(privacy, raw, full = false) {
+    if (full && typeof window.vpbaPrepareCapture === "function") {
+      try {
+        const pc = privacy.extractPageContext();
+        const r = await window.vpbaPrepareCapture(pc, raw);
+        const dataUrl = r.sanitizedScreenshot;
+        return { dataUrl, b64: dataUrl.replace(/^data:image\/\w+;base64,/, ""), redactionMap: r.redactionMap };
+      } catch (_) {}
+    }
+    const pc = privacy.extractPageContext();
+    const sensitive = pc.sensitiveElements || [];
+    const redactionMap = privacy.createRedactionMap(sensitive);
+    const dataUrl = await privacy.redactScreenshot(raw, sensitive);
+    privacy.assertSanitizedScreenshot(dataUrl, redactionMap);
+    return { dataUrl, b64: dataUrl.replace(/^data:image\/\w+;base64,/, ""), redactionMap };
+  }
+
+  async function captureSanitizedImage() {
+    // Clear any leftover abort flag from a previously stopped task.
+    window.vpbaCancelCapture = false;
+    const privacy = await getPrivacyPipeline(3000);
+    if (!privacy) return null;
+
+    const rawPrimary = await screenshotRaw();
+    if (!rawPrimary || taskCancelled) return null;
+
+    // Full ML scan (face blur + OCR PII) on the primary viewport.
+    const primary = await sanitizeTile(privacy, rawPrimary, true);
+    if (!primary || taskCancelled) return primary;
+
+    // Scroll-based extra tiles — only when page is significantly taller than
+    // the viewport. Uses fast DOM-only redaction (no ML) per extra tile.
+    const viewH = window.innerHeight;
+    const pageH = document.documentElement.scrollHeight;
+    if (pageH <= viewH * 1.35) return primary;
+
+    const extraTiles = [];
+    const origScroll = window.scrollY;
+    const step = Math.round(viewH * 0.85); // 15% overlap between tiles
+    try {
+      for (let i = 1; i <= 2; i++) {
+        if (taskCancelled || window.vpbaCancelCapture) break;
+        const targetY = origScroll + step * i;
+        if (targetY >= pageH) break;
+        window.scrollTo({ top: targetY, behavior: "instant" });
+        await delay(130); // let the layout repaint
+        if (taskCancelled || window.vpbaCancelCapture) break;
+        const rawTile = await screenshotRaw();
+        if (!rawTile) break;
+        const tile = await sanitizeTile(privacy, rawTile, false);
+        if (tile) extraTiles.push(tile);
+      }
+    } finally {
+      window.scrollTo({ top: origScroll, behavior: "instant" });
+    }
+
+    return extraTiles.length ? { ...primary, extraTiles } : primary;
+  }
+
+  // This preview is deliberately sent only as an in-memory runtime message.
+  // It is not added to browser history, chrome.storage, or Downloads.
+  function publishSanitizedPreview(source, label) {
+    try {
+      chrome.runtime.sendMessage({
+        type: "VPBA_SANITIZED_PREVIEW",
+        preview: {
+          label,
+          sanitizedText: String(source?.sanitizedText || ""),
+          sanitizedImage: source?.imageDataUrl || null,
+        },
+      }).catch(() => {});
+    } catch (_) {}
   }
 
   // ── Call agent backend ────────────────────────────────────────────────────────
@@ -763,21 +837,27 @@
       ? "Preparing sanitized page context and screenshot…"
       : "Preparing sanitized page context…", true);
     const ctx = getPageContext();
-    // Text-first applies to tasks as well as questions. This keeps hosted API
-    // cost down; the model can return requires_screenshot:true and the retry
-    // path will send one sanitized image only when DOM grounding is insufficient.
     const sendImage = forceImage;
+    if (sendImage) {
+      // Make it explicit that the local privacy pipeline runs before anything
+      // leaves the browser. The VLM call only starts after this completes.
+      reportAgentStatus("sanitizing", "Scanning locally \u2014 nothing uploaded yet\u2026", true);
+    }
     const image = sendImage ? await captureSanitizedImage() : null;
+    ensureNotCancelled(); // exit cleanly if user stopped during the local scan
 
     reportAgentStatus("vlm", "Waiting for VLM response…", true);
     return new Promise((resolve, reject) => {
       try {
+        // Include extra scroll tiles if we captured them.
+        const extraTileB64s = (image?.extraTiles || []).map(t => t.b64).filter(Boolean);
         chrome.runtime.sendMessage({
           type: "SEND_AGENT_TASK",
           agentPayload: {
             task_intent: intent,
             perception_state: ctx,
             image_b64: image?.b64 || null,
+            image_b64_tiles: extraTileB64s.length ? extraTileB64s : undefined,
             redaction_regions: (image?.redactionMap || []).map(r => ({ rect: r.boundingBox, strategy: r.strategy, category: r.category })),
             privacy_proof: { sanitized: true, rawScreenshotIncluded: false, redactionMap: image?.redactionMap || [] },
           },
@@ -785,6 +865,15 @@
           if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
           if (taskCancelled) return reject(new Error("Stopped by user"));
           if (!res?.success) return reject(new Error(res?.error || "Agent call failed"));
+          const source = {
+            sanitizedText: ctx.visibleText || "",
+            imageDataUrl: image?.dataUrl || null,
+            redactionMap: image?.redactionMap || [],
+          };
+          publishSanitizedPreview(
+            source,
+            image ? "Sanitized text and image sent to the VLM" : "Sanitized text sent to the VLM"
+          );
           resolve({
             tasks:          res.tasks,
             hadImage:       !!image,
@@ -792,48 +881,33 @@
             visibleTextLen: (ctx.visibleText || "").length,
             model:          res.model,
             latencyMs:      res.latency_ms,
-            source: {
-              sanitizedText: ctx.visibleText || "",
-              imageDataUrl: image?.dataUrl || null,
-              redactionMap: image?.redactionMap || [],
-            },
+            source,
           });
         });
       } catch (e) { reject(e); }
     });
   }
 
-  // ── Source transparency pill ──────────────────────────────────────────────────
-  function appendSourcePill(handle, { hadImage, elementCount, visibleTextLen, model, latencyMs, tries = 1, source = {} }) {
-    const imgBadge = hadImage
-      ? `<span class="vsrc-badge img">📷 screenshot</span>`
-      : `<span class="vsrc-badge">📄 text only</span>`;
-    const modelShort = esc((model || "unknown").split("/").pop());
-    const latStr  = latencyMs != null ? `${latencyMs}ms` : "?";
+  // ── Latency badge (source pill removed — no mode/model/elements/text/image) ──
+  function appendSourcePill(handle, { latencyMs, tries = 1 } = {}) {
+    const latStr = latencyMs != null ? `${Math.round(latencyMs)}ms` : "";
     const triesStr = tries > 1 ? ` · ${tries} tries` : "";
-    const safeText = esc(source.sanitizedText || "");
-    const regions = source.redactionMap || [];
-    const categories = [...new Set(regions.map(r => r.category || r.type || "PII"))].join(", ") || "none detected";
-    const imagePreview = hadImage && typeof source.imageDataUrl === "string" && source.imageDataUrl.startsWith("data:image/")
-      ? `<div class="vsrc-preview"><img src="${source.imageDataUrl}" alt="Sanitized screenshot sent to the model"><div class="vsrc-note">Preview of the sanitized image sent to the model — ${regions.length} redaction region${regions.length === 1 ? "" : "s"}: ${esc(categories)}.</div></div>`
-      : "";
+    if (!latStr && !triesStr) return;
+    handle.append(`<span class="vsrc-lat">⏱ ${latStr}${triesStr}</span>`);
+  }
 
-    handle.append(`
-      <details class="vsrc">
-        <summary>📎 Source · ${hadImage ? "📷 with image" : "📄 text-only"} · ${latStr}${triesStr}</summary>
-        <div class="vsrc-body">
-          <div class="vsrc-row"><span>Mode</span>${imgBadge}</div>
-          <div class="vsrc-row"><span>Model</span><span class="vsrc-code">${modelShort}</span></div>
-          <div class="vsrc-row"><span>Page elements</span><span class="vsrc-val">${elementCount}</span></div>
-          <div class="vsrc-row"><span>Text sent</span><span class="vsrc-val">${visibleTextLen.toLocaleString()} chars</span></div>
-          <div class="vsrc-row"><span>Latency</span><span class="vsrc-val">${latStr}</span></div>
-          <div class="vsrc-row"><span>Tries</span><span class="vsrc-val">${tries}</span></div>
-          <div class="vsrc-row"><span>Text payload</span><span class="vsrc-val">sanitized</span></div>
-          <pre class="vsrc-copy">${safeText || "(No page text was sent.)"}</pre>
-          ${imagePreview}
-        </div>
-      </details>
-    `);
+  // Ensure every pending/running vstep is marked done when a task finishes.
+  function finaliseSteps(handle) {
+    const root = handle?.bubble;
+    if (!root) return;
+    root.querySelectorAll(".vstep:not(.done):not(.fail)").forEach(el => {
+      el.classList.remove("running");
+      el.classList.add("done");
+      const ic = el.querySelector(".vstep-ic");
+      if (ic) ic.textContent = "✓";
+    });
+    const bar = root.querySelector(".vprog-bar");
+    if (bar) bar.style.width = "100%";
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -1739,29 +1813,24 @@
     const steps = tasksJson?.tasks || [];
     const answerHtml = tasksJson.answer
       ? `<div class="vans" style="margin-bottom:8px">${esc(tasksJson.answer)}</div>` : "";
-    const stepsHtml = steps.map(s => `
-      <div class="vstep" id="vpba-s-${s.step}">
-        <span class="vstep-ic">○</span>
-        <span class="vstep-tx">${esc(s.description || s.action)}</span>
-      </div>`).join("");
+    // Keep this markup compact. The native side-panel renders agent content with
+    // preserved whitespace, so indented template literals otherwise become large
+    // visible gaps above and between task rows.
+    const stepsHtml = steps.map(s =>
+      `<div class="vstep" id="vpba-s-${s.step}"><span class="vstep-ic">·</span><span class="vstep-tx">${esc(s.description || s.action)}</span></div>`
+    ).join("");
 
-    handle.set(`
-      ${answerHtml}
-      <div class="vtasks">
-        <div class="vtasks-hdr">▶ ${steps.length} step${steps.length !== 1 ? "s" : ""}</div>
-        <div class="vprog"><div class="vprog-bar" id="vpba-pbar"></div></div>
-        ${stepsHtml}
-      </div>
-    `);
+    handle.set(`${answerHtml}<div class="vtasks"><div class="vtasks-hdr">▶ ${steps.length} step${steps.length !== 1 ? "s" : ""}</div><div class="vprog"><div class="vprog-bar" id="vpba-pbar"></div></div>${stepsHtml}</div>`);
   }
 
   function updateStep(step, status, total) {
     const el  = document.getElementById(`vpba-s-${step}`);
     const bar = document.getElementById("vpba-pbar");
-    const ic  = { running:"⟳", done:"✓", fail:"✗" };
+    // running shows the same pending dot — no spinner icon
+    const ic  = { done:"✓", fail:"✗" };
     if (el) {
       el.className = `vstep ${status}`;
-      el.querySelector(".vstep-ic").textContent = ic[status] || "○";
+      el.querySelector(".vstep-ic").textContent = ic[status] || "·";
     }
     if (bar && total) bar.style.width = `${Math.round(step / total * 100)}%`;
   }
@@ -1849,6 +1918,7 @@
           intent: text, replanAfterNavigation: needsFreshResultPlan(tasks),
         });
         appendSourcePill(handle, result);
+        finaliseSteps(handle);
         setProcessing(false);
         if (!execResult.success) {
           handle.append(`<div class="verr" style="margin-top:8px">Stopped: ${esc(execResult.error || "")}</div>`);
@@ -1905,6 +1975,7 @@
     }
 
     appendSourcePill(handle, result);
+    finaliseSteps(handle);
     setProcessing(false);
     if (!execResult.success) {
       handle.append(`<div class="verr" style="margin-top:8px">Stopped at step ${execResult.completedSteps + 1}: ${esc(execResult.error || "")}</div>`);
@@ -1937,7 +2008,15 @@
       sendResponse({ success: false, error: "An agent task is already running." });
       return false;
     }
-    inp.value = String(message.text || "");
+    const taskText = String(message.text || "").trim();
+    if (!taskText) {
+      sendResponse({ success: false, error: "Empty task text received." });
+      return false;
+    }
+    // Set the hidden textarea so handleSend() can read it, temporarily
+    // re-enabling it in case a previous task left it disabled.
+    inp.disabled = false;
+    inp.value = taskText;
     handleSend();
     sendResponse({ success: true });
     return false;

@@ -230,6 +230,8 @@ async function detectDocumentPii(image) {
   reportProgress(`Reading ${targets.length} document image${targets.length === 1 ? "" : "s"} locally for PII redaction…`);
   const regions = [];
   for (const target of targets) {
+    // Honour a stop request between tiles so the UI is never stuck.
+    if (window.vpbaCancelCapture) break;
     const source = makeTileCanvas(image, target);
     const scale = Math.min(3, Math.max(1, 1600 / Math.max(source.width, source.height)));
     const enlarged = document.createElement("canvas");
@@ -318,6 +320,7 @@ async function detectFaces(image) {
   const tiles = getVisibleImageTiles(image);
   if (tiles.length > 0) reportProgress(`Checking ${tiles.length} visible image cards locally for faces…`);
   for (const tile of tiles) {
+    if (window.vpbaCancelCapture) break; // stop between image tiles
     const tileCanvas = makeTileCanvas(image, tile);
     const tileResult = faceLandmarker.detect(tileCanvas);
     for (const landmarks of tileResult.faceLandmarks || []) {
@@ -348,6 +351,10 @@ export async function inspectScreenshotLocally(dataUrl, classifySensitiveText) {
   let ocrRegions = [];
   let faceRuntime = "MediaPipe Face Landmarker Lite (bundled WASM)";
   let faceDetectionFailed = false;
+  if (window.vpbaCancelCapture) return {
+    regions: [], image: { width: image.width, height: image.height },
+    visualContext: { provider: faceRuntime, objects: [], facesDetected: 0, faceDetectionFailed: false, ocrPiiDetected: false },
+  };
   try {
     faces = await detectFaces(image);
   } catch (error) {

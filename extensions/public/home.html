@@ -16,7 +16,6 @@
     .user { align-self: flex-end; background: linear-gradient(135deg, #7c3aed, #2563eb); }
     .agent { align-self: flex-start; background: #161b22; border: 1px solid #30363d; }
     .empty { border: 1px dashed #30363d; padding: 22px; border-radius: 12px; color: #8b949e; }
-    .note { margin-top: 18px; padding: 12px; border: 1px solid rgba(124,58,237,.35); border-radius: 10px; background: rgba(124,58,237,.08); color: #c4b5fd; }
     #agent-status { display: flex; align-items: center; gap: 9px; min-height: 34px; margin: 12px 0 2px; padding: 8px 10px; border: 1px solid #30363d; border-radius: 9px; background: #0d131c; color: #94a3b8; font-size: 12px; }
     #agent-status.active { border-color: rgba(124,58,237,.7); color: #ddd6fe; }
     #agent-status-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; background: #64748b; }
@@ -27,8 +26,8 @@
     #privacy-status { display: none; margin-top: 10px; padding: 9px 11px; border-radius: 8px; background: #0c2436; color: #bae6fd; font-size: 12px; }
     #privacy-status.visible { display: block; }
     .agent .vsrc-preview { display: none; }
-    #composer { display: flex; gap: 8px; margin-top: auto; padding-top: 18px; position: sticky; bottom: 0; background: #090d13; }
-    #intent { flex: 1; min-height: 42px; resize: vertical; border: 1px solid #7c3aed; border-radius: 9px; background: #161b22; color: #e6edf3; padding: 10px; font: inherit; }
+    #composer { display: flex; gap: 8px; margin-top: auto; padding-top: 16px; position: sticky; bottom: 0; background: #090d13; }
+    #intent { flex: 1; min-height: 62px; resize: vertical; border: 1px solid #7c3aed; border-radius: 10px; background: #161b22; color: #e6edf3; padding: 12px; font: inherit; line-height: 1.45; }
     #send, #privacy-scan, #refresh-agent, #stop-agent { border: 0; border-radius: 9px; color: white; cursor: pointer; font: inherit; }
     #send { width: 46px; background: #7c3aed; font-size: 18px; }
     #privacy-scan { background: #075985; padding: 0 12px; white-space: nowrap; }
@@ -36,36 +35,44 @@
     #stop-agent { display: none; width: 42px; background: #b91c1c; font-size: 15px; }
     #stop-agent.visible { display: inline-block; }
     #send:disabled, #privacy-scan:disabled, #intent:disabled { opacity: .55; cursor: wait; }
-    #vlm-settings { margin-top: 12px; color: #8b949e; font-size: 12px; }
-    #vlm-settings summary { cursor: pointer; }
-    #vlm-config { display: flex; gap: 6px; margin-top: 8px; }
-    #vlm-endpoint { flex: 1; min-width: 0; border: 1px solid #30363d; border-radius: 7px; background: #161b22; color: #e6edf3; padding: 7px; font: inherit; }
-    #save-vlm { border: 0; border-radius: 7px; padding: 0 9px; background: #30363d; color: #e6edf3; cursor: pointer; font: inherit; }
-    #vlm-status { display: block; margin-top: 5px; color: #94a3b8; }
+    /* Native-panel redesign: monochrome black / warm-cream themes. */
+    :root { color-scheme: dark; --bg:#080808; --surface:#111; --raised:#191919; --line:#2b2b2b; --line-strong:#444; --text:#f1f0ed; --muted:#9a9892; --quiet:#6b6964; --accent:#e8e2d5; --accent-ink:#171715; --agent:#151515; --status:#d9d2c3; --danger:#d65a55; --shadow:rgba(0,0,0,.28); }
+    :root[data-theme="light"] { color-scheme: light; --bg:#f3eee3; --surface:#fbf7ef; --raised:#fffaf2; --line:#ded6c8; --line-strong:#c9bdac; --text:#24211d; --muted:#70695e; --quiet:#948a7b; --accent:#28251f; --accent-ink:#fbf7ef; --agent:#fffaf1; --status:#514b42; --danger:#b8423c; --shadow:rgba(58,47,32,.10); }
+    body { background:var(--bg); color:var(--text); font:14px/1.55 Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; letter-spacing:-.01em; transition:background .28s ease,color .28s ease; }
+    main { width:min(760px,calc(100% - 28px)); padding:18px 0 20px; }
+    .topbar { display:flex; align-items:center; justify-content:space-between; margin-bottom:18px; }
+    .brand { display:flex; align-items:center; gap:10px; } .brand-mark { display:grid; place-items:center; width:31px; height:31px; border:1px solid var(--line-strong); border-radius:10px; background:var(--surface); } .brand-mark svg { width:17px; height:17px; }
+    h1 { font-size:15px; font-weight:650; letter-spacing:-.025em; } .brand-subtitle { margin:0; color:var(--quiet); font-size:11px; }
+    .icon-button { display:grid; place-items:center; width:34px; height:34px; border:1px solid var(--line); border-radius:10px; background:transparent; color:var(--muted); cursor:pointer; transition:transform .16s ease,background .16s ease,border-color .16s ease,color .16s ease; } .icon-button:hover { transform:translateY(-1px); border-color:var(--line-strong); background:var(--surface); color:var(--text); } .icon-button:active { transform:scale(.94); } .icon-button svg { width:17px; height:17px; }
+    #history { gap:11px; padding:2px 0 18px; } .message { max-width:91%; padding:10px 12px; border-radius:14px; animation:message-in .22s cubic-bezier(.2,.8,.2,1) both; } .user { border-radius:14px 4px 14px 14px; background:var(--accent); color:var(--accent-ink); font-weight:500; } .agent { border:1px solid var(--line); border-radius:4px 14px 14px 14px; background:var(--agent); box-shadow:0 7px 22px var(--shadow); } .empty { margin:48px 0; border:0; color:var(--quiet); text-align:center; }
+    .agent { white-space:normal; } .agent .vsrc-preview { display:none; } .agent .vans,.agent .verr,.agent .vstep-tx { white-space:pre-wrap; } .agent .vstep { display:flex; align-items:center; gap:6px; min-height:0; padding:2px 0; margin:0; color:var(--muted); font-size:13px; line-height:1.4; } .agent .vstep.running { color:var(--text); } .agent .vstep.done { color:#7d9e7c; } .agent .vstep.fail,.verr { color:var(--danger); } .agent .vstep-ic { flex-shrink:0; width:13px; text-align:center; font-size:12px; line-height:1; margin:0; } .agent .vstep-tx { flex:1; margin:0; } .agent .vtasks { min-height:0; margin:4px 0 0; padding:5px 0 0; border-top:1px solid var(--line); } .agent .vtasks-hdr { color:var(--quiet); font-size:11px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; margin:0 0 3px; padding:0; } .agent .vprog { height:2px; margin:3px 0 4px; overflow:hidden; border-radius:20px; background:var(--line); } .agent .vprog-bar { height:100%; width:0; border-radius:inherit; background:var(--status); transition:width .3s ease; } .agent .vsrc-lat { display:block; margin:6px 0 0; color:var(--quiet); font-size:11.5px; line-height:1.2; } .agent .vconf { margin-top:7px; padding:9px 10px; border:1px solid var(--line-strong); border-radius:10px; } .agent .vconf-title { font-weight:650; font-size:12.5px; } .agent .vconf-reason { font-size:12px; color:var(--muted); margin-top:2px; } .agent .vconf-actions { display:flex; gap:7px; margin-top:8px; } .agent .vbtn { padding:6px 10px; border:1px solid var(--line); border-radius:7px; background:transparent; color:var(--text); cursor:pointer; font-size:12.5px; font-weight:600; transition:opacity .15s,transform .1s; } .agent .vbtn:hover { opacity:.85; transform:translateY(-1px); } .agent .vbtn-go { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); }
+    #agent-status { min-height:28px; margin:4px 0 9px; padding:0; border:0; background:transparent; color:var(--quiet); font-size:11.5px; } #agent-status-dot { width:6px; height:6px; background:var(--quiet); } #agent-status.active { color:var(--status); } #agent-status.active #agent-status-dot { background:var(--status); animation:agent-pulse 1.2s ease-in-out infinite; } #agent-status.active #agent-status-text::after { content:""; display:inline-block; width:14px; height:4px; margin-left:6px; border-radius:4px; background:currentColor; vertical-align:middle; animation:status-travel 1s ease-in-out infinite; }
+    #privacy-status { background:var(--surface); border-color:var(--line); color:var(--muted); }
+    #sanitized-inspector { display:none; margin:0 0 10px; overflow:hidden; border:1px solid var(--line); border-radius:13px; background:var(--surface); animation:message-in .2s ease both; } #sanitized-inspector.visible { display:block; } .inspector-top { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:9px 10px; border-bottom:1px solid var(--line); } #inspector-label { overflow:hidden; color:var(--muted); font-size:11.5px; text-overflow:ellipsis; white-space:nowrap; } .inspector-actions { display:flex; gap:5px; } .inspector-button { border:1px solid transparent; border-radius:7px; background:transparent; color:var(--muted); padding:5px 7px; cursor:pointer; font:inherit; font-size:11px; } .inspector-button:hover,.inspector-button.active { border-color:var(--line); background:var(--raised); color:var(--text); } .inspector-button:disabled { display:none; } #discard-preview { color:var(--quiet); } #preview-content { max-height:250px; overflow:auto; } #preview-text { display:none; margin:0; padding:11px; color:var(--text); font:11px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace; white-space:pre-wrap; word-break:break-word; } #preview-image { display:none; width:100%; max-height:250px; object-fit:contain; background:#000; } #preview-text.visible,#preview-image.visible { display:block; }
+    #composer { display:flex; flex-direction:column; gap:8px; padding:11px 11px 10px; border:1px solid var(--line); border-radius:16px; background:var(--surface); box-shadow:0 -8px 28px var(--shadow); transition:border-color .2s ease,background .28s ease; } #composer:focus-within { border-color:var(--line-strong); } #intent { width:100%; min-height:64px; max-height:190px; border:0; outline:0; background:transparent; color:var(--text); padding:2px 0; font-size:14px; line-height:1.55; resize:none; font-family:inherit; } #intent::placeholder { color:var(--quiet); }
+    .composer-row { display:flex; align-items:center; justify-content:flex-end; gap:6px; }
+    .cmp-btn { display:inline-flex; align-items:center; justify-content:center; gap:5px; height:32px; padding:0 10px; border:1px solid var(--line); border-radius:9px; background:var(--surface); color:var(--muted); font:12.5px/1 inherit; cursor:pointer; white-space:nowrap; flex-shrink:0; transition:transform .15s ease,background .15s ease,border-color .15s ease,color .15s ease,opacity .15s ease; } .cmp-btn svg { width:14px; height:14px; flex-shrink:0; } .cmp-btn:hover:not(:disabled) { transform:translateY(-1px); border-color:var(--line-strong); background:var(--raised); color:var(--text); } .cmp-btn:active:not(:disabled) { transform:scale(.94); } .cmp-btn:disabled { opacity:.38; cursor:not-allowed; } .cmp-btn.icon-only { width:32px; padding:0; } #send { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); font-weight:600; } #send:hover:not(:disabled) { opacity:.85; background:var(--accent); } #stop-agent { background:var(--danger); border-color:var(--danger); color:#fff; display:none; } #stop-agent.visible { display:inline-flex; animation:pop-in .18s ease both; } #send:disabled,#intent:disabled { opacity:.42; cursor:wait; }
+    @keyframes agent-pulse { 50% { transform:scale(.45); opacity:.4; } } @keyframes status-travel { 50% { transform:translateX(5px); opacity:.38; } } @keyframes message-in { from { opacity:0; transform:translateY(7px); } to { opacity:1; transform:translateY(0); } } @keyframes pop-in { from { opacity:0; transform:scale(.84); } to { opacity:1; transform:scale(1); } } @media (prefers-reduced-motion:reduce) { *,*::before,*::after { animation-duration:.01ms!important; transition-duration:.01ms!important; } }
   </style>
 </head>
 <body>
   <main>
-    <h1>Visual Agent</h1>
-    <p>Persistent browser-wide chat. Each task uses only the sanitized context of the active page.</p>
+    <header class="topbar"><div class="brand"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"/><circle cx="12" cy="12" r="2.7"/></svg></span><div><h1>Visual Agent</h1><p class="brand-subtitle">Private browser assistant</p></div></div><button id="theme-toggle" class="icon-button" type="button" title="Switch theme" aria-label="Switch theme"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6 7 7M17 17l1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4"/><circle cx="12" cy="12" r="4"/></svg></button></header>
     <section id="history" aria-live="polite"></section>
+    <section id="sanitized-inspector" aria-label="Temporary in-memory sanitised context preview">
+      <div class="inspector-top"><span id="inspector-label">Sanitised context · in-memory only</span><div class="inspector-actions"><button id="show-preview-text" class="inspector-button active" type="button">Text</button><button id="show-preview-image" class="inspector-button" type="button">Image</button><button id="toggle-preview" class="inspector-button" type="button" title="Collapse / expand preview">▲</button><button id="discard-preview" class="inspector-button" type="button" title="Close and release from memory">×</button></div></div>
+      <div id="preview-content"><pre id="preview-text"></pre><img id="preview-image" alt="Temporary sanitised screenshot preview"></div>
+    </section>
     <div id="agent-status" aria-live="polite"><span id="agent-status-dot"></span><span id="agent-status-text">Ready</span></div>
-    <div class="note">This panel remains open while websites change. Search tasks automatically inspect updated results before selecting the final result.</div>
     <div id="privacy-status" aria-live="polite"></div>
-    <details id="vlm-settings">
-      <summary>VLM connection</summary>
-      <div id="vlm-config">
-        <input id="vlm-endpoint" type="url" spellcheck="false" aria-label="VLM agent endpoint" placeholder="https://your-vlm.example/v1/agent">
-        <button id="save-vlm" type="button">Save</button>
-      </div>
-      <span id="vlm-status">Privacy stays in the browser; only sanitized context is sent to this endpoint.</span>
-    </details>
     <div id="composer">
-      <textarea id="intent" rows="1" placeholder="Ask anything or describe a task..."></textarea>
-      <button id="refresh-agent" type="button" title="Start a fresh agent conversation" aria-label="Refresh agent">↻</button>
-      <button id="privacy-scan" title="Run local privacy scan only">Privacy scan</button>
-      <button id="stop-agent" type="button" title="Stop current task" aria-label="Stop current task">■</button>
-      <button id="send" title="Send task">Send</button>
+      <textarea id="intent" rows="3" placeholder="Message the agent…"></textarea>
+      <div class="composer-row">
+        <button id="refresh-agent" class="cmp-btn icon-only" type="button" title="New conversation" aria-label="New conversation"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 11a8 8 0 1 0 2 5.3"/><path d="M20 4v7h-7"/></svg></button>
+        <button id="privacy-scan" class="cmp-btn" type="button" title="Run local privacy scan"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3 4 6.5V12c0 5 3.4 8 8 9 4.6-1 8-4 8-9V6.5L12 3Z"/><path d="m8.5 12 2.2 2.2 4.8-5"/></svg><span>Privacy Scan</span></button>
+        <button id="stop-agent" class="cmp-btn icon-only" type="button" title="Stop current task" aria-label="Stop current task"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg></button>
+        <button id="send" class="cmp-btn icon-only" type="button" title="Send message" aria-label="Send message"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 14-7-4 14-3.5-5.5L5 12Z"/><path d="m11.5 13.5 3-3"/></svg></button>
+      </div>
     </div>
   </main>
   <script type="module" src="home.js"></script>
